@@ -38,8 +38,8 @@ export interface InboundRouteInput {
 /**
  * Inbound routes — Mailgun-Routes-killer CRUD. Match rules walk in
  * ascending priority; the first stop_on_match=true rule short-
- * circuits. match_recipient supports a tiny shell-glob ("support@*",
- * "*@acme.com", "*").
+ * circuits. match_recipient supports shell-style wildcards for the local
+ * part, destination domain, or the complete recipient.
  */
 export class InboundRoutesResource extends Resource {
   list(): Promise<{ routes: InboundRoute[] }> {

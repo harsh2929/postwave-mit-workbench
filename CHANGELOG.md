@@ -13,6 +13,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Added explicit `campaignTemplates.favorite()` and `.unfavorite()` helpers for
   authenticated user-private catalog state.
 
+## [0.1.2-workbench] - 2026-11-15
+
+### Changed
+
+- Removed the optional signed-conversion setup snippet from the SDK reference.
+- Removed the contact-shaped template from the synthetic fixture helper.
+- Added a source check for contact-domain fragments in interpolated examples.
+
 ## [0.1.1-workbench] - 2026-11-15
 
 ### Changed

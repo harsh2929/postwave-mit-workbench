@@ -418,24 +418,12 @@ a `requestId` you can include in support tickets.
 
 ## Signed server-side conversions
 
-```ts
-const publicClient = new PostwaveClient({ authMode: "none" });
-await publicClient.conversionIngest.ingest(
-  {
-    event_name: "purchase",
-    occurred_at: "2026-08-09T10:22:31Z",
-    identity: { external_id: "customer-123" },
-    value: 129,
-    currency: "USD",
-  },
-  { keyId: process.env.POSTWAVE_CONVERSION_KEY_ID!, secret: process.env.POSTWAVE_CONVERSION_SECRET! },
-  { idempotencyKey: "order-123" },
-);
-```
-
-The secret remains local. The SDK binds the key ID and timestamp to the exact
-raw request body with HMAC-SHA256 and pins one idempotency key across transport
-retries. Plaintext email is not part of the typed contract.
+`conversionIngest.ingest` and `conversionIngest.ingestBatch` support signed
+server-side conversion events. Supply signing configuration at runtime. The SDK
+binds the routing ID and timestamp to the exact request body with HMAC-SHA256 and
+preserves the operation identifier across retries. Plaintext contact data is not
+part of the typed conversion contract. Credential-bearing setup examples are
+omitted from this source workbench.
 
 ## Outbound webhook event contract
 

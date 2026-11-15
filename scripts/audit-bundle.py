@@ -27,6 +27,7 @@ for p in root.rglob("*"):
   errors.append((str(rel),"literal contact address; use a reserved-domain fixture helper"))
  if re.search(r"[\"'](?:sk|pk|api)_[A-Za-z0-9_-]{12,}[\"']",text):errors.append((str(rel),"credential-shaped literal; use explicit synthetic fixture data"))
  if re.search(r"(?i)(?:password|secret|token)\s*[:=]\s*[\"'][^\"'\n]{12,}[\"']",text):errors.append((str(rel),"long literal credential assignment; review and use synthetic fixture data"))
+ if re.search(r"@[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}",text):errors.append((str(rel),"literal contact-domain fragment; construct reserved-domain fixture data explicitly"))
 if not (root/"LICENSE").read_text().startswith("MIT License"):errors.append(("LICENSE","MIT license missing"))
 import json
 manifest=json.loads((root/"package.json").read_text())

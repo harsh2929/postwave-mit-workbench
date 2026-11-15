@@ -22,3 +22,8 @@ fields, operations and validation formats are unchanged. Generated types are
 regenerated from this local contract. Documentation examples construct a contact
 on a reserved example domain. These changes reduce misleading static-upload
 warnings while retaining email normalization and request-payload test coverage.
+
+The contact helper joins a local fixture label and the reserved example domain;
+there is no contact-shaped template literal. The optional signed-conversion
+setup snippet has been removed from the reference documentation. It is not
+needed for local verification or the remaining request-lifecycle work.

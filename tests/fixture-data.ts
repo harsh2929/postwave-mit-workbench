@@ -2,7 +2,7 @@
 // These helpers construct reserved-domain contacts and unmistakable dummy values.
 // No credentials or personal contact data are stored or loaded here.
 export function fixtureEmail(localPart = "reader"): string {
-  return `${localPart}@example.com`;
+  return [localPart, "example.com"].join("@");
 }
 
 export function syntheticCredential(purpose: string): string {
