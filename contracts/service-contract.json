@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "0171272e555b679431f2f7a6e810de5cede9546c",
+  "automationRoutes": [
+    "GET /v1/automations",
+    "GET /v1/automations/health",
+    "GET /v1/automations/{id}/events",
+    "GET /v1/automations/{id}/executions",
+    "GET /v1/automations/{id}/step-metrics",
+    "PATCH /v1/automations/{id}",
+    "POST /v1/automations",
+    "POST /v1/automations/event",
+    "POST /v1/automations/trigger",
+    "POST /v1/automations/{id}/behavioral-triggers",
+    "POST /v1/automations/{id}/pause",
+    "POST /v1/automations/{id}/resume"
+  ],
+  "outboundWebhookEvents": [
+    "approval.decided",
+    "approval.requested",
+    "assurance.run.blocked",
+    "assurance.run.completed",
+    "audit.created",
+    "bounce.received",
+    "campaign.sent",
+    "email.bounced",
+    "email.complained",
+    "email.delivered",
+    "list.subscriber.added",
+    "list_health.degraded",
+    "subscriber.added",
+    "subscriber.removed",
+    "subscriber.unsubscribed"
+  ],
+  "resolvedEventConstantReferences": 7,
+  "sourceSha256": {
+    "services/automation/internal/handlers/automation.go": "fd09631432311d071090acfb34feaef2acb511ec5d3e7ddfa013877f58faee75",
+    "apps/api/internal/outbound_webhooks/outbound_webhooks.go": "58114d5995a6d1a0be0a606548974e570c62b373b71aba3a44810d2f24fb1c4a"
+  },
+  "scope": "A fixed API contract snapshot. No backend implementation, service availability or live-provider guarantee is implied."
+}
