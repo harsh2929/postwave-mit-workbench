@@ -1362,20 +1362,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "items": [
-                     *         {
-                     *           "id": "7f02cfe8-43b8-4f25-92de-e0c57e4df460",
-                     *           "email": "reader@example.com",
-                     *           "status": "enabled"
-                     *         }
-                     *       ],
-                     *       "total": 1,
-                     *       "page": 1,
-                     *       "per_page": 50
-                     *     }
-                     */
                     "application/json": components["schemas"]["SubscriberPage"];
                 };
             };
@@ -1394,16 +1380,6 @@ export interface operations {
         };
         requestBody: {
             content: {
-                /**
-                 * @example {
-                 *       "email": "reader@example.com",
-                 *       "status": "enabled",
-                 *       "consent_source": "api",
-                 *       "tags": [
-                 *         "newsletter"
-                 *       ]
-                 *     }
-                 */
                 "application/json": components["schemas"]["SubscriberInput"];
             };
         };
@@ -1414,13 +1390,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "id": "7f02cfe8-43b8-4f25-92de-e0c57e4df460",
-                     *       "email": "reader@example.com",
-                     *       "status": "enabled"
-                     *     }
-                     */
                     "application/json": components["schemas"]["Subscriber"];
                 };
             };
@@ -1454,13 +1423,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "id": "7f02cfe8-43b8-4f25-92de-e0c57e4df460",
-                     *       "email": "reader@example.com",
-                     *       "status": "enabled"
-                     *     }
-                     */
                     "application/json": components["schemas"]["Subscriber"];
                 };
             };
@@ -1529,13 +1491,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "id": "7f02cfe8-43b8-4f25-92de-e0c57e4df460",
-                     *       "email": "reader@example.com",
-                     *       "status": "disabled"
-                     *     }
-                     */
                     "application/json": components["schemas"]["Subscriber"];
                 };
             };
@@ -1553,7 +1508,6 @@ export interface operations {
     searchSubscribers: {
         parameters: {
             query: {
-                /** @example @example.com status:enabled */
                 q: string;
                 include_archived?: boolean;
                 page?: number;
@@ -1571,20 +1525,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "items": [
-                     *         {
-                     *           "id": "7f02cfe8-43b8-4f25-92de-e0c57e4df460",
-                     *           "email": "reader@example.com",
-                     *           "status": "enabled"
-                     *         }
-                     *       ],
-                     *       "total": 1,
-                     *       "page": 1,
-                     *       "per_page": 50
-                     *     }
-                     */
                     "application/json": components["schemas"]["SubscriberPage"];
                 };
             };

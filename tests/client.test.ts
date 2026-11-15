@@ -1,3 +1,4 @@
+import { fixtureEmail, syntheticCredential, syntheticCredentialUrl } from "./fixture-data.js";
 import { describe, it, expect, vi } from "vitest";
 import { PostwaveClient } from "../src/index.js";
 
@@ -17,13 +18,13 @@ describe("PostwaveClient — happy path", () => {
     const fetch = mockFetch(({ url, init }) => {
       expect(url).toBe("https://api.moosewave.com/api/v1/me");
       expect((init.headers as Record<string, string>)["Authorization"]).toBe(
-        "Bearer sk_test_123",
+        `Bearer ${syntheticCredential("api")}`,
       );
       expect((init.headers as Record<string, string>)["X-Tenant-Slug"]).toBe(
         "acme",
       );
       return new Response(
-        JSON.stringify({ tenant: "acme", user: "fixture4@example.com" }),
+        JSON.stringify({ tenant: "acme", user: fixtureEmail("fixture4") }),
         {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -32,7 +33,7 @@ describe("PostwaveClient — happy path", () => {
     });
 
     const pw = new PostwaveClient({
-      apiKey: "sk_test_123",
+      apiKey: syntheticCredential("api"),
       tenantId: "acme",
       fetch,
       retries: 0,
@@ -41,7 +42,7 @@ describe("PostwaveClient — happy path", () => {
       "GET",
       "/api/v1/me",
     );
-    expect(me).toEqual({ tenant: "acme", user: "fixture4@example.com" });
+    expect(me).toEqual({ tenant: "acme", user: fixtureEmail("fixture4") });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -117,7 +118,7 @@ describe("PostwaveClient — happy path", () => {
     const page = await pw.subscribers.list({
       page: 2,
       per_page: 25,
-      q: "alice@example.com",
+      q: fixtureEmail("alice"),
       status: "disabled",
     });
     expect(page.total).toBe(0);
@@ -183,7 +184,7 @@ describe("PostwaveClient — happy path", () => {
       () =>
         new PostwaveClient({
           apiKey: "k",
-          baseUrl: "https://user:pass@api.example.test",
+          baseUrl: syntheticCredentialUrl(),
           fetch,
         }),
     ).toThrow(/baseUrl must be a valid/);

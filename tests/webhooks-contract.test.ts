@@ -1,3 +1,4 @@
+import { fixtureEmail, syntheticCredential } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 import { OUTBOUND_WEBHOOK_EVENT_TYPES, PostwaveClient } from "../src/index.js";
 
@@ -79,7 +80,7 @@ describe("canonical webhook resource contracts", () => {
               },
               auth_config_status: "ready",
             },
-            signing_secret: "owhsec_once",
+            signing_secret: syntheticCredential("outbound-reveal"),
           },
           201,
         );
@@ -92,21 +93,21 @@ describe("canonical webhook resource contracts", () => {
     const created = await client.webhooks.create({
       url: "https://receiver.example/hook",
       events: ["list.subscriber.added"],
-      auth_config: { type: "bearer", bearer_token: "write-only" },
+      auth_config: { type: "bearer", bearer_token: syntheticCredential("write-only-bearer") },
     });
     await client.webhooks.replay("delivery/1", "stable-replay-key");
 
     expect(seen[0]!.url).toContain("/api/v1/outbound-webhooks?");
     expect(seen[1]).toMatchObject({
       method: "POST",
-      body: expect.stringContaining('"bearer_token":"write-only"'),
+      body: expect.stringContaining('"bearer_token":' + JSON.stringify(syntheticCredential("write-only-bearer"))),
     });
     expect(created.webhook.auth_config).toEqual({
       type: "bearer",
       bearer_configured: true,
       secret_redacted: true,
     });
-    expect(JSON.stringify(created.webhook)).not.toContain("write-only");
+    expect(JSON.stringify(created.webhook)).not.toContain(syntheticCredential("write-only-bearer"));
     expect(seen[2]!.url).toMatch(
       /\/api\/v1\/outbound-webhooks\/deliveries\/delivery%2F1\/replay$/u,
     );
@@ -142,7 +143,7 @@ describe("canonical webhook resource contracts", () => {
       action_target_id: "vip",
     });
     await client.inboundWebhooks.previewTransform(".payload", {
-      payload: { email: "fixture1@example.com" },
+      payload: { email: fixtureEmail("fixture1") },
     });
 
     expect(seen[0]!.url).toMatch(/\/api\/v1\/inbound-webhooks\/in%2F1$/u);

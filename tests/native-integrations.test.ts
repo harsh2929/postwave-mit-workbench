@@ -1,3 +1,4 @@
+import { fixtureEmail, PROVIDER_TOKEN_CLEANUP_ACTION } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { PostwaveClient } from "../src/index.js";
@@ -38,17 +39,17 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.subscriptions.get("subscription/1");
     await pw.nativeIntegrations.subscriptions.sync("subscription/1", {
       cursor: "sub_cursor_1",
-      subscriptions: [{ email: "ada@example.com", subscription_id: "sub_123" }],
-      shipments: [{ email: "ada@example.com", tracking_number: "trk_123" }],
+      subscriptions: [{ email: fixtureEmail("ada"), subscription_id: "sub_123" }],
+      shipments: [{ email: fixtureEmail("ada"), tracking_number: "trk_123" }],
       events: [
-        { email: "ada@example.com", event_name: "subscription.renewed" },
+        { email: fixtureEmail("ada"), event_name: "subscription.renewed" },
       ],
     });
     await pw.nativeIntegrations.subscriptions.backfill("subscription/1", {
-      subscriptions: [{ email: "lin@example.com", subscription_id: "sub_456" }],
+      subscriptions: [{ email: fixtureEmail("lin"), subscription_id: "sub_456" }],
     });
     await pw.nativeIntegrations.subscriptions.ingest("subscription/1", {
-      email: "grace@example.com",
+      email: fixtureEmail("grace"),
       event_name: "shipment.delivered",
     });
     await pw.nativeIntegrations.subscriptions.pause("subscription/1");
@@ -56,7 +57,7 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.subscriptions.acknowledgeProviderCleanup(
       "subscription/1",
       {
-        completed_actions: ["api_token_revoked_or_rotated"],
+        completed_actions: [PROVIDER_TOKEN_CLEANUP_ACTION],
         notes: "Verified in Recharge console.",
       },
     );
@@ -94,11 +95,11 @@ describe("NativeIntegrationsResource", () => {
         body: {
           cursor: "sub_cursor_1",
           subscriptions: [
-            { email: "ada@example.com", subscription_id: "sub_123" },
+            { email: fixtureEmail("ada"), subscription_id: "sub_123" },
           ],
-          shipments: [{ email: "ada@example.com", tracking_number: "trk_123" }],
+          shipments: [{ email: fixtureEmail("ada"), tracking_number: "trk_123" }],
           events: [
-            { email: "ada@example.com", event_name: "subscription.renewed" },
+            { email: fixtureEmail("ada"), event_name: "subscription.renewed" },
           ],
         },
       },
@@ -107,14 +108,14 @@ describe("NativeIntegrationsResource", () => {
         method: "POST",
         body: {
           subscriptions: [
-            { email: "lin@example.com", subscription_id: "sub_456" },
+            { email: fixtureEmail("lin"), subscription_id: "sub_456" },
           ],
         },
       },
       {
         url: "https://api.moosewave.com/api/v1/subscription-integrations/subscription%2F1/ingest",
         method: "POST",
-        body: { email: "grace@example.com", event_name: "shipment.delivered" },
+        body: { email: fixtureEmail("grace"), event_name: "shipment.delivered" },
       },
       {
         url: "https://api.moosewave.com/api/v1/subscription-integrations/subscription%2F1/pause",
@@ -130,7 +131,7 @@ describe("NativeIntegrationsResource", () => {
         url: "https://api.moosewave.com/api/v1/subscription-integrations/subscription%2F1/provider-cleanup/acknowledge",
         method: "POST",
         body: {
-          completed_actions: ["api_token_revoked_or_rotated"],
+          completed_actions: [PROVIDER_TOKEN_CLEANUP_ACTION],
           notes: "Verified in Recharge console.",
         },
       },
@@ -184,7 +185,7 @@ describe("NativeIntegrationsResource", () => {
     });
     expect(() =>
       pw.nativeIntegrations.marketing.ingest("marketing/1", {
-        email: "ada@example.com",
+        email: fixtureEmail("ada"),
       }),
     ).toThrow(/does not support ingest/);
     await pw.nativeIntegrations.marketing.pause("marketing/1");
@@ -299,13 +300,13 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.lead.get("lead/1");
     await pw.nativeIntegrations.lead.sync("lead/1", {
       cursor: "lead_cursor_1",
-      submissions: [{ email: "ada@example.com", form_id: "form_123" }],
+      submissions: [{ email: fixtureEmail("ada"), form_id: "form_123" }],
     });
     await pw.nativeIntegrations.lead.backfill("lead/1", {
-      submissions: [{ email: "lin@example.com", form_id: "form_123" }],
+      submissions: [{ email: fixtureEmail("lin"), form_id: "form_123" }],
     });
     await pw.nativeIntegrations.lead.ingest("lead/1", {
-      email: "grace@example.com",
+      email: fixtureEmail("grace"),
       source_id: "evt_1",
     });
     await pw.nativeIntegrations.lead.pause("lead/1");
@@ -343,20 +344,20 @@ describe("NativeIntegrationsResource", () => {
         method: "POST",
         body: {
           cursor: "lead_cursor_1",
-          submissions: [{ email: "ada@example.com", form_id: "form_123" }],
+          submissions: [{ email: fixtureEmail("ada"), form_id: "form_123" }],
         },
       },
       {
         url: "https://api.moosewave.com/api/v1/lead-integrations/lead%2F1/backfill",
         method: "POST",
         body: {
-          submissions: [{ email: "lin@example.com", form_id: "form_123" }],
+          submissions: [{ email: fixtureEmail("lin"), form_id: "form_123" }],
         },
       },
       {
         url: "https://api.moosewave.com/api/v1/lead-integrations/lead%2F1/ingest",
         method: "POST",
-        body: { email: "grace@example.com", source_id: "evt_1" },
+        body: { email: fixtureEmail("grace"), source_id: "evt_1" },
       },
       {
         url: "https://api.moosewave.com/api/v1/lead-integrations/lead%2F1/pause",
@@ -469,11 +470,11 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.crm.get("crm/1");
     await pw.nativeIntegrations.crm.sync("crm/1", {
       cursor: "after-1",
-      contacts: [{ email: "ada@example.com", first_name: "Ada" }],
-      events: [{ email: "ada@example.com", event_name: "Deal Stage Changed" }],
+      contacts: [{ email: fixtureEmail("ada"), first_name: "Ada" }],
+      events: [{ email: fixtureEmail("ada"), event_name: "Deal Stage Changed" }],
     });
     await pw.nativeIntegrations.crm.backfill("crm/1", {
-      contacts: [{ email: "lin@example.com" }],
+      contacts: [{ email: fixtureEmail("lin") }],
     });
     await pw.nativeIntegrations.crm.pause("crm/1");
     const disconnect = await pw.nativeIntegrations.crm.disconnect("crm/1");
@@ -522,16 +523,16 @@ describe("NativeIntegrationsResource", () => {
         method: "POST",
         body: {
           cursor: "after-1",
-          contacts: [{ email: "ada@example.com", first_name: "Ada" }],
+          contacts: [{ email: fixtureEmail("ada"), first_name: "Ada" }],
           events: [
-            { email: "ada@example.com", event_name: "Deal Stage Changed" },
+            { email: fixtureEmail("ada"), event_name: "Deal Stage Changed" },
           ],
         },
       },
       {
         url: "https://api.moosewave.com/api/v1/crm/integrations/crm%2F1/backfill",
         method: "POST",
-        body: { contacts: [{ email: "lin@example.com" }] },
+        body: { contacts: [{ email: fixtureEmail("lin") }] },
       },
       {
         url: "https://api.moosewave.com/api/v1/crm/integrations/crm%2F1/pause",
@@ -617,7 +618,7 @@ describe("NativeIntegrationsResource", () => {
       () => pw.nativeIntegrations.support.backfill(id, {}),
       () =>
         pw.nativeIntegrations.support.ingest(id, {
-          email: "private@example.com",
+          email: fixtureEmail("private"),
           event_name: "support.ticket_updated",
         }),
       () => pw.nativeIntegrations.support.pause(id),
@@ -757,7 +758,7 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.reviews.sync("review/1", {
       cursor: "after-1",
       reviews: [
-        { source_id: "r1", reviewer_email: "ada@example.com", rating: 5 },
+        { source_id: "r1", reviewer_email: fixtureEmail("ada"), rating: 5 },
       ],
     });
     await pw.nativeIntegrations.reviews.backfill("review/1", {
@@ -765,7 +766,7 @@ describe("NativeIntegrationsResource", () => {
     });
     await pw.nativeIntegrations.reviews.ingest("review/1", {
       source_id: "r2",
-      reviewer_email: "lin@example.com",
+      reviewer_email: fixtureEmail("lin"),
       rating: 5,
       title: "Great",
     });
@@ -809,7 +810,7 @@ describe("NativeIntegrationsResource", () => {
         body: {
           cursor: "after-1",
           reviews: [
-            { source_id: "r1", reviewer_email: "ada@example.com", rating: 5 },
+            { source_id: "r1", reviewer_email: fixtureEmail("ada"), rating: 5 },
           ],
         },
       },
@@ -823,7 +824,7 @@ describe("NativeIntegrationsResource", () => {
         method: "POST",
         body: {
           source_id: "r2",
-          reviewer_email: "lin@example.com",
+          reviewer_email: fixtureEmail("lin"),
           rating: 5,
           title: "Great",
         },
@@ -883,22 +884,22 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.loyalty.sync("loyalty/1", {
       cursor: "after-1",
       members: [
-        { source_id: "m1", email: "vip@example.com", points_balance: 1200 },
+        { source_id: "m1", email: fixtureEmail("vip"), points_balance: 1200 },
       ],
       events: [
         {
           source_id: "e1",
-          email: "vip@example.com",
+          email: fixtureEmail("vip"),
           event_name: "loyalty.points_earned",
         },
       ],
     });
     await pw.nativeIntegrations.loyalty.backfill("loyalty/1", {
-      members: [{ source_id: "m0", email: "lin@example.com" }],
+      members: [{ source_id: "m0", email: fixtureEmail("lin") }],
     });
     await pw.nativeIntegrations.loyalty.ingest("loyalty/1", {
       source_id: "e2",
-      email: "vip@example.com",
+      email: fixtureEmail("vip"),
       event_name: "loyalty.reward_redeemed",
     });
     await pw.nativeIntegrations.loyalty.pause("loyalty/1");
@@ -937,12 +938,12 @@ describe("NativeIntegrationsResource", () => {
         body: {
           cursor: "after-1",
           members: [
-            { source_id: "m1", email: "vip@example.com", points_balance: 1200 },
+            { source_id: "m1", email: fixtureEmail("vip"), points_balance: 1200 },
           ],
           events: [
             {
               source_id: "e1",
-              email: "vip@example.com",
+              email: fixtureEmail("vip"),
               event_name: "loyalty.points_earned",
             },
           ],
@@ -951,14 +952,14 @@ describe("NativeIntegrationsResource", () => {
       {
         url: "https://api.moosewave.com/api/v1/loyalty-integrations/loyalty%2F1/backfill",
         method: "POST",
-        body: { members: [{ source_id: "m0", email: "lin@example.com" }] },
+        body: { members: [{ source_id: "m0", email: fixtureEmail("lin") }] },
       },
       {
         url: "https://api.moosewave.com/api/v1/loyalty-integrations/loyalty%2F1/ingest",
         method: "POST",
         body: {
           source_id: "e2",
-          email: "vip@example.com",
+          email: fixtureEmail("vip"),
           event_name: "loyalty.reward_redeemed",
         },
       },
@@ -1008,14 +1009,14 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.analytics.get("analytics/1");
     await pw.nativeIntegrations.analytics.sync("analytics/1", {
       cursor: "cur_1",
-      profiles: [{ email: "ada@example.com", traits: { plan: "pro" } }],
-      events: [{ email: "ada@example.com", event_name: "Product Viewed" }],
+      profiles: [{ email: fixtureEmail("ada"), traits: { plan: "pro" } }],
+      events: [{ email: fixtureEmail("ada"), event_name: "Product Viewed" }],
     });
     await pw.nativeIntegrations.analytics.backfill("analytics/1", {
-      profiles: [{ email: "lin@example.com" }],
+      profiles: [{ email: fixtureEmail("lin") }],
     });
     await pw.nativeIntegrations.analytics.ingest("analytics/1", {
-      email: "ada@example.com",
+      email: fixtureEmail("ada"),
       event_name: "Checkout Started",
     });
     await pw.nativeIntegrations.analytics.pause("analytics/1");
@@ -1053,19 +1054,19 @@ describe("NativeIntegrationsResource", () => {
         method: "POST",
         body: {
           cursor: "cur_1",
-          profiles: [{ email: "ada@example.com", traits: { plan: "pro" } }],
-          events: [{ email: "ada@example.com", event_name: "Product Viewed" }],
+          profiles: [{ email: fixtureEmail("ada"), traits: { plan: "pro" } }],
+          events: [{ email: fixtureEmail("ada"), event_name: "Product Viewed" }],
         },
       },
       {
         url: "https://api.moosewave.com/api/v1/analytics-integrations/analytics%2F1/backfill",
         method: "POST",
-        body: { profiles: [{ email: "lin@example.com" }] },
+        body: { profiles: [{ email: fixtureEmail("lin") }] },
       },
       {
         url: "https://api.moosewave.com/api/v1/analytics-integrations/analytics%2F1/ingest",
         method: "POST",
-        body: { email: "ada@example.com", event_name: "Checkout Started" },
+        body: { email: fixtureEmail("ada"), event_name: "Checkout Started" },
       },
       {
         url: "https://api.moosewave.com/api/v1/analytics-integrations/analytics%2F1/pause",
@@ -1096,7 +1097,7 @@ describe("NativeIntegrationsResource", () => {
 
     expect(() =>
       pw.nativeIntegrations.crm.sync(" ", {
-        contacts: [{ email: "ada@example.com" }],
+        contacts: [{ email: fixtureEmail("ada") }],
       }),
     ).toThrow(/CRM import integration id is required/);
     expect(fetch).not.toHaveBeenCalled();
@@ -1156,7 +1157,7 @@ describe("NativeIntegrationsResource", () => {
     await pw.nativeIntegrations.commerce.get("commerce/1");
     await pw.nativeIntegrations.commerce.sync("commerce/1", {
       cursor: "cur_1",
-      orders: [{ source_id: "order_1", customer_email: "buyer@example.com" }],
+      orders: [{ source_id: "order_1", customer_email: fixtureEmail("buyer") }],
       product_deletions: [{ source_id: "square://product/item_deleted" }],
     });
     await pw.nativeIntegrations.commerce.backfill("commerce/1", {
@@ -1210,7 +1211,7 @@ describe("NativeIntegrationsResource", () => {
         body: {
           cursor: "cur_1",
           orders: [
-            { source_id: "order_1", customer_email: "buyer@example.com" },
+            { source_id: "order_1", customer_email: fixtureEmail("buyer") },
           ],
           product_deletions: [{ source_id: "square://product/item_deleted" }],
         },

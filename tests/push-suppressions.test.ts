@@ -1,3 +1,4 @@
+import { syntheticCredential } from "./fixture-data.js";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
@@ -180,7 +181,7 @@ describe("TypeScript Route43 push suppression boundary", () => {
   });
 
   it("strictly decodes manual add and compare-and-swap delete receipts", async () => {
-    const token = "fcm-device-token-with-enough-entropy-123";
+    const token = syntheticCredential("fcm-device-123");
     const fetch = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === "POST") {
         expect(new URL(url).pathname).toBe("/api/v1/push/suppressions");
@@ -227,12 +228,12 @@ describe("TypeScript Route43 push suppression boundary", () => {
   it("strictly binds atomic bulk receipts to input order and versions", async () => {
     const imports = [
       {
-        device_token: "fcm-device-token-with-enough-entropy-123",
+        device_token: syntheticCredential("fcm-device-123"),
         platform: "fcm" as const,
         reason: "manual" as const,
       },
       {
-        device_token: "web-device-token-with-enough-entropy-456",
+        device_token: syntheticCredential("web-device-456"),
         platform: "web" as const,
         reason: "manual" as const,
       },

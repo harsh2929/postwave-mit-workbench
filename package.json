@@ -1,6 +1,6 @@
 {
   "name": "@moosewave/sdk-workbench",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Existing Moosewave TypeScript SDK, isolated with API contract fixtures and offline verification.",
   "keywords": [
     "postwave",

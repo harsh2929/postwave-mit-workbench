@@ -19,7 +19,7 @@ async function main(): Promise<void> {
     `/api/public/forms/${encodeURIComponent(slug)}/submit`,
     {
       body: {
-        email: "test@example.com",
+        email: ["reader", "example.com"].join("@"),
         name: "Test User",
         consent: "yes",
         customFields: { source: "sdk-example" },

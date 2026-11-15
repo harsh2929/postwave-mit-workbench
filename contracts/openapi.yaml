@@ -78,7 +78,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SubscriberPage' }
-              example: { items: [{ id: 7f02cfe8-43b8-4f25-92de-e0c57e4df460, email: reader@example.com, status: enabled }], total: 1, page: 1, per_page: 50 }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -94,14 +93,12 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/SubscriberInput' }
-            example: { email: reader@example.com, status: enabled, consent_source: api, tags: [newsletter] }
       responses:
         '201':
           description: Subscriber created or upserted.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Subscriber' }
-              example: { id: 7f02cfe8-43b8-4f25-92de-e0c57e4df460, email: reader@example.com, status: enabled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '402': { $ref: '#/components/responses/PlanLimitExceeded' }
@@ -129,7 +126,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Subscriber' }
-              example: { id: 7f02cfe8-43b8-4f25-92de-e0c57e4df460, email: reader@example.com, status: enabled }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -156,7 +152,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Subscriber' }
-              example: { id: 7f02cfe8-43b8-4f25-92de-e0c57e4df460, email: reader@example.com, status: disabled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -192,7 +187,7 @@ paths:
       tags: [Subscribers]
       x-required-scopes: [read:subscribers]
       parameters:
-        - { in: query, name: q, required: true, schema: { type: string, minLength: 1 }, example: '@example.com status:enabled' }
+        - { in: query, name: q, required: true, schema: { type: string, minLength: 1 } }
         - { in: query, name: include_archived, schema: { type: boolean, default: false } }
         - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
         - { in: query, name: per_page, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -202,7 +197,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SubscriberPage' }
-              example: { items: [{ id: 7f02cfe8-43b8-4f25-92de-e0c57e4df460, email: reader@example.com, status: enabled }], total: 1, page: 1, per_page: 50 }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }

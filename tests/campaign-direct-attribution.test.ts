@@ -1,3 +1,4 @@
+import { fixtureEmail } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -82,7 +83,7 @@ describe("CampaignsResource direct-attribution evidence", () => {
   it("strictly rejects identity/code fields and a readership claim", () => {
     const withIdentity = page();
     (withIdentity.items as Array<Record<string, unknown>>)[0]!.recipient_email =
-      "person@example.com";
+      fixtureEmail("person");
     expect(() =>
       decodeCampaignDirectAttributionEvidencePage(withIdentity),
     ).toThrow(/fields/);

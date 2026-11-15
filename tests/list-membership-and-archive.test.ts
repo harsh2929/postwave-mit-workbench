@@ -1,3 +1,4 @@
+import { fixtureEmail } from "./fixture-data.js";
 // Contract guards for two SDK/server drifts that silently returned wrong data.
 //
 //  1. `subscribers.list()` used to declare a `list_id` filter and forward it as
@@ -44,7 +45,7 @@ describe("list membership goes to the list-scoped endpoint", () => {
       items: [
         {
           id: "sub/1",
-          email: "a@example.com",
+          email: fixtureEmail("a"),
           status: "enabled",
           source: "form",
           added_at: "2026-07-01T00:00:00Z",
@@ -68,7 +69,7 @@ describe("list membership goes to the list-scoped endpoint", () => {
     expect(url.searchParams.get("status")).toBe("enabled");
     expect(url.searchParams.get("page")).toBe("2");
     expect(url.searchParams.get("per_page")).toBe("50");
-    expect(page.items[0]!.email).toBe("a@example.com");
+    expect(page.items[0]!.email).toBe(fixtureEmail("a"));
     expect(page.total).toBe(1);
   });
 

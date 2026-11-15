@@ -1,3 +1,4 @@
+import { fixtureEmail, syntheticCredential } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { PostwaveClient } from "../src/index.js";
@@ -105,7 +106,7 @@ describe("DeveloperMarketplaceResource", () => {
     await pw.developerMarketplace.submitListingReview("app/123");
     await pw.developerMarketplace.listInstallations("installed");
     await pw.developerMarketplace.installApp("app/123", {
-      installed_by: "ada@example.com",
+      installed_by: fixtureEmail("ada"),
       status: "installed",
       granted_scopes: ["read:subscribers"],
     });
@@ -122,7 +123,7 @@ describe("DeveloperMarketplaceResource", () => {
       profile_type: "agency",
     });
     await pw.developerMarketplace.submitPartnerProfileReview();
-    await pw.developerMarketplace.reviewQueue("review-secret", {
+    await pw.developerMarketplace.reviewQueue(syntheticCredential("marketplace-review"), {
       kind: "partner_profile",
       limit: 25,
     });
@@ -132,7 +133,7 @@ describe("DeveloperMarketplaceResource", () => {
         tenant_id: "00000000-0000-0000-0000-000000000000",
         decision: "approve",
       },
-      "review-secret",
+      syntheticCredential("marketplace-review"),
     );
     await pw.developerMarketplace.reviewListingDecision(
       "app/123",
@@ -141,7 +142,7 @@ describe("DeveloperMarketplaceResource", () => {
         decision: "approve",
         partner_level: "certified",
       },
-      "review-secret",
+      syntheticCredential("marketplace-review"),
     );
     await pw.developerMarketplace.reviewPartnerProfileDecision(
       "tenant/123",
@@ -149,7 +150,7 @@ describe("DeveloperMarketplaceResource", () => {
         decision: "approve",
         partner_level: "premier",
       },
-      "review-secret",
+      syntheticCredential("marketplace-review"),
     );
     await pw.developerMarketplace.listAuditLogs("app/123");
     await pw.developerMarketplace.authorize({
@@ -165,13 +166,13 @@ describe("DeveloperMarketplaceResource", () => {
       code: "pw_code_123",
       redirect_uri: "https://partner.example/oauth/callback",
       client_id: "pw_oac_123",
-      client_secret: "pw_oas_secret",
+      client_secret: syntheticCredential("oauth-client"),
       code_verifier: "verifier",
     });
     await pw.developerMarketplace.revoke({
-      token: "pw_at_123",
+      token: syntheticCredential("oauth-access"),
       client_id: "pw_oac_123",
-      client_secret: "pw_oas_secret",
+      client_secret: syntheticCredential("oauth-client"),
     });
 
     const routeMap = seen.map(({ idempotencyKey: _idempotencyKey, ...entry }) => entry);
@@ -325,7 +326,7 @@ describe("DeveloperMarketplaceResource", () => {
         url: "https://api.moosewave.com/api/v1/developer-marketplace/apps/app%2F123/installations",
         method: "POST",
         body: {
-          installed_by: "ada@example.com",
+          installed_by: fixtureEmail("ada"),
           status: "installed",
           granted_scopes: ["read:subscribers"],
         },
@@ -378,7 +379,7 @@ describe("DeveloperMarketplaceResource", () => {
         url: "https://api.moosewave.com/api/v1/developer-marketplace/review/queue?kind=partner_profile&limit=25",
         method: "GET",
         body: undefined,
-        reviewSecret: "review-secret",
+        reviewSecret: syntheticCredential("marketplace-review"),
       },
       {
         url: "https://api.moosewave.com/api/v1/developer-marketplace/review/apps/app%2F123/decision",
@@ -387,7 +388,7 @@ describe("DeveloperMarketplaceResource", () => {
           tenant_id: "00000000-0000-0000-0000-000000000000",
           decision: "approve",
         },
-        reviewSecret: "review-secret",
+        reviewSecret: syntheticCredential("marketplace-review"),
       },
       {
         url: "https://api.moosewave.com/api/v1/developer-marketplace/review/apps/app%2F123/listing/decision",
@@ -397,7 +398,7 @@ describe("DeveloperMarketplaceResource", () => {
           decision: "approve",
           partner_level: "certified",
         },
-        reviewSecret: "review-secret",
+        reviewSecret: syntheticCredential("marketplace-review"),
       },
       {
         url: "https://api.moosewave.com/api/v1/developer-marketplace/review/partner-profiles/tenant%2F123/decision",
@@ -406,7 +407,7 @@ describe("DeveloperMarketplaceResource", () => {
           decision: "approve",
           partner_level: "premier",
         },
-        reviewSecret: "review-secret",
+        reviewSecret: syntheticCredential("marketplace-review"),
       },
       {
         url: "https://api.moosewave.com/api/v1/developer-marketplace/audit-logs?app_id=app%2F123",
@@ -435,7 +436,7 @@ describe("DeveloperMarketplaceResource", () => {
           code: "pw_code_123",
           redirect_uri: "https://partner.example/oauth/callback",
           client_id: "pw_oac_123",
-          client_secret: "pw_oas_secret",
+          client_secret: syntheticCredential("oauth-client"),
           code_verifier: "verifier",
         },
         reviewSecret: undefined,
@@ -444,9 +445,9 @@ describe("DeveloperMarketplaceResource", () => {
         url: "https://api.moosewave.com/api/v1/developer-marketplace/oauth/revoke",
         method: "POST",
         body: {
-          token: "pw_at_123",
+          token: syntheticCredential("oauth-access"),
           client_id: "pw_oac_123",
-          client_secret: "pw_oas_secret",
+          client_secret: syntheticCredential("oauth-client"),
         },
         reviewSecret: undefined,
       },

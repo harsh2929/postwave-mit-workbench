@@ -1,3 +1,4 @@
+import { syntheticCredential } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { PostwaveClient } from "../src/index.js";
@@ -25,7 +26,7 @@ describe("MobilePushResource", () => {
 
     await client.mobilePush.register({
       device_key: deviceKey,
-      expo_push_token: "ExponentPushToken[test-device]",
+      expo_push_token: `ExponentPushToken[${syntheticCredential("expo-device")}]`,
       platform: "ios",
       enabled_events: ["approval.requested"],
     });
@@ -40,7 +41,7 @@ describe("MobilePushResource", () => {
         credentials: "include",
         body: JSON.stringify({
           device_key: deviceKey,
-          expo_push_token: "ExponentPushToken[test-device]",
+          expo_push_token: `ExponentPushToken[${syntheticCredential("expo-device")}]`,
           platform: "ios",
           enabled_events: ["approval.requested"],
         }),

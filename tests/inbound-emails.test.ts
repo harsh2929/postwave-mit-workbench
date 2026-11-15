@@ -1,3 +1,4 @@
+import { syntheticCredential } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { PostwaveClient } from "../src/index.js";
@@ -24,7 +25,7 @@ describe("InboundEmailsResource endpoint secret contract", () => {
       .fn()
       .mockResolvedValueOnce(json(metadata))
       .mockResolvedValueOnce(
-        json({ ...metadata, secret: "iem_revealed_once" }),
+        json({ ...metadata, secret: syntheticCredential("inbound-reveal") }),
       );
     const client = new PostwaveClient({ apiKey: "pw_test", fetch, retries: 0 });
 
@@ -32,7 +33,7 @@ describe("InboundEmailsResource endpoint secret contract", () => {
     const rotated = await client.inboundEmails.rotateEndpoint();
 
     expect(read).not.toHaveProperty("secret");
-    expect(rotated.secret).toBe("iem_revealed_once");
+    expect(rotated.secret).toBe(syntheticCredential("inbound-reveal"));
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       "https://api.moosewave.com/api/v1/inbound-emails/endpoint",

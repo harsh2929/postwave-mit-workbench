@@ -1,3 +1,4 @@
+import { fixtureEmail, syntheticCredential } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { ACCOUNT_DELETION_CONFIRMATION, PostwaveClient } from "../src/index.js";
@@ -12,7 +13,7 @@ function json(body: unknown): Response {
 describe("AccountResource", () => {
   it("me() reads GET /api/v1/me", async () => {
     const fetch = vi.fn(async () =>
-      json({ tenant: "acme", user: "fixture2@example.com" }),
+      json({ tenant: "acme", user: fixtureEmail("fixture2") }),
     );
     const pw = new PostwaveClient({
       apiKey: "k",
@@ -38,7 +39,7 @@ describe("AccountResource", () => {
       json({
         tenant_id: "t",
         display_name: "Acme Team",
-        default_reply_to: "fixture3@example.com",
+        default_reply_to: fixtureEmail("fixture3"),
         timezone: "UTC",
         date_format: "MMM D, YYYY",
         updated_at: "2026-06-21T00:00:00Z",
@@ -53,7 +54,7 @@ describe("AccountResource", () => {
 
     const res = await pw.account.update({
       display_name: "Acme Team",
-      default_reply_to: "fixture3@example.com",
+      default_reply_to: fixtureEmail("fixture3"),
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -62,7 +63,7 @@ describe("AccountResource", () => {
         method: "PATCH",
         body: JSON.stringify({
           display_name: "Acme Team",
-          default_reply_to: "fixture3@example.com",
+          default_reply_to: fixtureEmail("fixture3"),
         }),
       }),
     );
@@ -92,7 +93,7 @@ describe("AccountResource", () => {
     await pw.account.deleteSelf(
       {
         confirmation: ACCOUNT_DELETION_CONFIRMATION,
-        password: "current password",
+        password: syntheticCredential("account-reauth"),
         mfa_code: "123456",
         region: "GDPR",
       },
@@ -106,7 +107,7 @@ describe("AccountResource", () => {
         credentials: "include",
         body: JSON.stringify({
           confirmation: "DELETE MY ACCOUNT",
-          password: "current password",
+          password: syntheticCredential("account-reauth"),
           mfa_code: "123456",
           region: "GDPR",
         }),

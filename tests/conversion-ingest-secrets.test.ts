@@ -157,7 +157,7 @@ describe("ConversionIngestSecretsResource", () => {
   it("treats a wrong 2xx status or malformed reveal as ambiguous", async () => {
     for (const response of [
       json(issued(), 200),
-      json(issued({ secret: "not-base64url" }), 201),
+      json(issued({ secret: "invalid" }), 201),
       json(issued({ revoked_at: UPDATED }), 201),
       json(issued({ identity_projection_status: "ready" }), 201),
       json(issued({ label: "mismatched" }), 201),

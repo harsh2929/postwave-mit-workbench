@@ -1,3 +1,4 @@
+import { syntheticCredential } from "./fixture-data.js";
 import { describe, expect, it } from "vitest";
 import {
   computeSignatureHeader,
@@ -6,7 +7,7 @@ import {
 } from "../src/webhook.js";
 
 describe("canonical webhook HMAC verification", () => {
-  const secret = "owhsec_test_super_secret";
+  const secret = syntheticCredential("webhook-signing");
   const body = JSON.stringify({
     event: {
       id: "11111111-1111-4111-8111-111111111111",

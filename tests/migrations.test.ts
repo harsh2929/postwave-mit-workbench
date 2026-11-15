@@ -1,3 +1,4 @@
+import { syntheticCredential } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -366,8 +367,8 @@ describe("MigrationsResource path safety", () => {
     });
 
     await pw.migrations.credentials("klaviyo", {
-      access_token: "caller-managed-bearer",
-      refresh_token: "caller-managed-refresh",
+      access_token: syntheticCredential("migration-access"),
+      refresh_token: syntheticCredential("migration-refresh"),
       account_id: "account_primary",
     });
 
@@ -375,8 +376,8 @@ describe("MigrationsResource path safety", () => {
       {
         url: "https://api.moosewave.com/api/v1/migrations/klaviyo/credentials",
         body: {
-          access_token: "caller-managed-bearer",
-          refresh_token: "caller-managed-refresh",
+          access_token: syntheticCredential("migration-access"),
+          refresh_token: syntheticCredential("migration-refresh"),
           account_id: "account_primary",
         },
       },
@@ -400,7 +401,7 @@ describe("MigrationsResource path safety", () => {
     });
 
     await pw.migrations.credentials("customerio", {
-      api_key: "cio_app_key",
+      api_key: syntheticCredential("migration-app"),
       account_id: "9001",
       extra: { region: "eu" },
     });
@@ -409,7 +410,7 @@ describe("MigrationsResource path safety", () => {
       {
         url: "https://api.moosewave.com/api/v1/migrations/customerio/credentials",
         body: {
-          api_key: "cio_app_key",
+          api_key: syntheticCredential("migration-app"),
           account_id: "9001",
           extra: { region: "eu" },
         },
@@ -567,7 +568,7 @@ describe("MigrationsResource path safety", () => {
 
     await pw.migrations.dryRun("activecampaign", "job/a");
     await pw.migrations.credentials("activecampaign", {
-      api_key: "new_token",
+      api_key: syntheticCredential("migration-replacement"),
       account_id: "https://acme.api-us1.com/api/3",
     });
     await pw.migrations.startShadowMonitor("activecampaign", "job/a", 900);
@@ -582,7 +583,7 @@ describe("MigrationsResource path safety", () => {
       evidence: ["cutover-ticket-42"],
     });
     await pw.migrations.refreshSourceSession("job/a", {
-      api_key: "new_token",
+      api_key: syntheticCredential("migration-replacement"),
       account_id: "https://acme.api-us1.com/api/3",
       extra: { api_url: "https://acme.api-us1.com/api/3" },
     });
@@ -603,7 +604,7 @@ describe("MigrationsResource path safety", () => {
         url: "https://api.moosewave.com/api/v1/migrations/activecampaign/credentials",
         method: "POST",
         body: {
-          api_key: "new_token",
+          api_key: syntheticCredential("migration-replacement"),
           account_id: "https://acme.api-us1.com/api/3",
         },
       },
@@ -650,7 +651,7 @@ describe("MigrationsResource path safety", () => {
         url: "https://api.moosewave.com/api/v1/migrations/job%2Fa/source-session",
         method: "POST",
         body: {
-          api_key: "new_token",
+          api_key: syntheticCredential("migration-replacement"),
           account_id: "https://acme.api-us1.com/api/3",
           extra: { api_url: "https://acme.api-us1.com/api/3" },
         },
@@ -720,7 +721,7 @@ describe("MigrationsResource path safety", () => {
     });
 
     await pw.migrations.credentials("beehiiv", {
-      api_key: "beehiiv-secret",
+      api_key: syntheticCredential("migration-original"),
       account_id: "pub_primary",
       extra: { publication_id: "pub_primary" },
     });
@@ -730,7 +731,7 @@ describe("MigrationsResource path safety", () => {
     expect(shadow.import_epoch).toBe("b".repeat(64));
     expect(shadow.baseline_fingerprint).toBe("c".repeat(64));
     await pw.migrations.refreshSourceSession("job/a", {
-      api_key: "beehiiv-secret-rotated",
+      api_key: syntheticCredential("migration-rotated"),
       account_id: "pub_primary",
       extra: { publication_id: "pub_primary" },
     });
@@ -740,7 +741,7 @@ describe("MigrationsResource path safety", () => {
         url: "https://api.moosewave.com/api/v1/migrations/beehiiv/credentials",
         method: "POST",
         body: {
-          api_key: "beehiiv-secret",
+          api_key: syntheticCredential("migration-original"),
           account_id: "pub_primary",
           extra: { publication_id: "pub_primary" },
         },
@@ -759,7 +760,7 @@ describe("MigrationsResource path safety", () => {
         url: "https://api.moosewave.com/api/v1/migrations/job%2Fa/source-session",
         method: "POST",
         body: {
-          api_key: "beehiiv-secret-rotated",
+          api_key: syntheticCredential("migration-rotated"),
           account_id: "pub_primary",
           extra: { publication_id: "pub_primary" },
         },
@@ -847,7 +848,7 @@ describe("MigrationsResource path safety", () => {
     });
 
     await pw.migrations.credentials("hubspot", {
-      api_key: "pat-secret",
+      api_key: syntheticCredential("private-app-original"),
       account_id: "12345",
       extra: { hub_id: "12345" },
     });
@@ -856,7 +857,7 @@ describe("MigrationsResource path safety", () => {
     await pw.migrations.deltaImport("hubspot", "job/a");
     await pw.migrations.shadowCheck("hubspot", "job/a");
     await pw.migrations.refreshSourceSession("job/a", {
-      api_key: "pat-secret-rotated",
+      api_key: syntheticCredential("private-app-rotated"),
       account_id: "12345",
       extra: { portal_id: "12345" },
     });
@@ -869,7 +870,7 @@ describe("MigrationsResource path safety", () => {
         url: "https://api.moosewave.com/api/v1/migrations/hubspot/credentials",
         method: "POST",
         body: {
-          api_key: "pat-secret",
+          api_key: syntheticCredential("private-app-original"),
           account_id: "12345",
           extra: { hub_id: "12345" },
         },
@@ -898,7 +899,7 @@ describe("MigrationsResource path safety", () => {
         url: "https://api.moosewave.com/api/v1/migrations/job%2Fa/source-session",
         method: "POST",
         body: {
-          api_key: "pat-secret-rotated",
+          api_key: syntheticCredential("private-app-rotated"),
           account_id: "12345",
           extra: { portal_id: "12345" },
         },

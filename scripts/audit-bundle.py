@@ -24,8 +24,9 @@ for p in root.rglob("*"):
  if re.search(r"/Users/[A-Za-z0-9._-]+/",text):errors.append((str(rel),"personal home path"))
  if re.search(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",text):errors.append((str(rel),"cloud access key shape"))
  for email in re.findall(r"(?<![\w.+-])[A-Za-z0-9][A-Za-z0-9._%+\-]{0,63}@[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z]{2,}(?![\w.])",text):
-  domain=email.rsplit("@",1)[1].lower()
-  if domain not in {"example.com","example.org","example.net"} and not domain.endswith((".example",".invalid",".test",".localhost")):errors.append((str(rel),"non-reserved contact address"))
+  errors.append((str(rel),"literal contact address; use a reserved-domain fixture helper"))
+ if re.search(r"[\"'](?:sk|pk|api)_[A-Za-z0-9_-]{12,}[\"']",text):errors.append((str(rel),"credential-shaped literal; use explicit synthetic fixture data"))
+ if re.search(r"(?i)(?:password|secret|token)\s*[:=]\s*[\"'][^\"'\n]{12,}[\"']",text):errors.append((str(rel),"long literal credential assignment; review and use synthetic fixture data"))
 if not (root/"LICENSE").read_text().startswith("MIT License"):errors.append(("LICENSE","MIT license missing"))
 import json
 manifest=json.loads((root/"package.json").read_text())
@@ -41,4 +42,4 @@ for required in ["README.md","FIXTURES.md","package.json","package-lock.json",".
 if errors:
  for path,reason in sorted(set(errors)):print(path+": "+reason)
  sys.exit(1)
-print(f"Bundle source boundary passed: {len(files)} files; MIT, supported source, reserved contact examples, no instruction/workflow files")
+print(f"Bundle source boundary passed: {len(files)} files; MIT, supported source, generated reserved-domain contact examples, no instruction/workflow files")

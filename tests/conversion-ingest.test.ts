@@ -1,3 +1,4 @@
+import { fixtureEmail, syntheticCredential } from "./fixture-data.js";
 import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,7 +11,7 @@ import {
 
 const credentials = {
   keyId: "orders-primary",
-  secret: "sk_conversion_test_super_secret",
+  secret: syntheticCredential("conversion-signing"),
 };
 const timestamp = 1_786_242_151;
 
@@ -118,18 +119,18 @@ describe("ConversionIngestResource", () => {
     expect(other).not.toBe(good);
 
     const identityHMAC = await computeConversionEmailHMACSHA256(
-      "  Buyer@Example.COM  ",
+      `  ${fixtureEmail("buyer").toUpperCase()}  `,
       credentials,
     );
     expect(identityHMAC).toBe(
       createHmac("sha256", credentials.secret)
-        .update("buyer@example.com")
+        .update(fixtureEmail("buyer"))
         .digest("hex"),
     );
     expect(
-      await computeConversionEmailHMACSHA256("buyer@example.com", {
+      await computeConversionEmailHMACSHA256(fixtureEmail("buyer"), {
         ...credentials,
-        secret: "a-rotated-secret",
+        secret: syntheticCredential("conversion-signing-rotated"),
       }),
     ).not.toBe(identityHMAC);
 

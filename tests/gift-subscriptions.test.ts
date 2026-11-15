@@ -1,3 +1,4 @@
+import { fixtureEmail } from "./fixture-data.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { PostwaveClient } from "../src/index.js";
@@ -139,7 +140,7 @@ describe("GiftSubscriptionsResource sanitized archive contract", () => {
       q: "   ",
       filter: "all",
       sort: "newest",
-      recipient_email: "must-not-forward@example.com",
+      recipient_email: fixtureEmail("must-not-forward"),
     } as Parameters<typeof client.giftSubscriptions.list>[0] & {
       recipient_email: string;
     });
@@ -153,7 +154,7 @@ describe("GiftSubscriptionsResource sanitized archive contract", () => {
     const fetch = vi.fn();
     const client = new PostwaveClient({ apiKey: "test", fetch, retries: 0 });
     const invalidParams: unknown[] = [
-      { q: "person@example.com" },
+      { q: fixtureEmail("person") },
       { q: "1234567" },
       { q: "f".repeat(33) },
       { q: 12345678 },
@@ -182,7 +183,7 @@ describe("GiftSubscriptionsResource sanitized archive contract", () => {
       "a1b2c3d4e5f67890abcdef0123456789",
       "a1b2c3d4-e5f6-7890-abcd-ef012345678",
       " a1b2c3d4-e5f6-7890-abcd-ef0123456789",
-      "person@example.com",
+      fixtureEmail("person"),
       null,
     ];
 

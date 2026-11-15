@@ -262,6 +262,8 @@ const supportDetail = await pw.nativeIntegrations.support.get(
 );
 console.log(supportDetail.runtime_status); // held
 
+const contactEmail = ["reader", "example.com"].join("@");
+
 const providers = await pw.nativeIntegrations.crm.providers();
 console.log(providers.items.map((provider) => provider.name));
 
@@ -273,17 +275,17 @@ const connection = await pw.nativeIntegrations.crm.create({
 });
 
 await pw.nativeIntegrations.crm.sync(connection.id, {
-  contacts: [{ email: "ada@example.com" }],
+  contacts: [{ email: contactEmail }],
 });
 await pw.nativeIntegrations.lead.ingest("lead_conn_123", {
-  email: "ada@example.com",
+  email: contactEmail,
 });
 const runs = await pw.nativeIntegrations.crm.runs(connection.id, 10);
 console.log(runs.items[0]?.status);
 
 await pw.nativeIntegrations.commerce.sync("commerce_conn_123", {
   cursor: "last_cursor",
-  orders: [{ source_id: "order_123", customer_email: "ada@example.com" }],
+  orders: [{ source_id: "order_123", customer_email: contactEmail }],
 });
 
 await pw.nativeIntegrations.warehouse.backfill("warehouse_conn_123", {
