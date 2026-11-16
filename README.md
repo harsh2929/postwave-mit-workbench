@@ -70,6 +70,26 @@ which is unchanged.
 The semantics are documented under "Timeouts, budgets and cancellation" in
 [SDK-REFERENCE.md](SDK-REFERENCE.md).
 
+### Event-stream checks without dependencies
+
+```sh
+npm run --offline test:events:offline
+npm run --offline test:offline
+```
+
+`test:events:offline` runs eight compatibility cases against `events.stream()`:
+transport/auth headers and filters, LF data lines, complete CRLF frames,
+the existing complete-JSON-at-EOF behavior, malformed and complete oversized
+frames, fragmented UTF-8, HTTP error mapping and consumer early exit.
+`test:offline` runs both focused suites (23 tests in this release).
+
+These are baseline checks. They do not prove complete SSE conformance,
+fragmented-frame recovery or cancellation with a non-cooperative transport.
+The full event suite remains `tests/events-stream.test.ts`, run by `verify`.
+If behavior changes, add regression cases for it in the appropriate suites.
+Neither offline command replaces linting, type checking, build verification
+or the other checks in `npm run verify`.
+
 See [SDK-REFERENCE.md](SDK-REFERENCE.md) for the original client API, and [FIXTURES.md](FIXTURES.md) for the test-data and pinned-contract boundary. Library examples that target a live service are reference code; they are not run by verification and require credentials supplied by the operator.
 
 ## Upload contents

@@ -6,8 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.0-workbench] - 2026-11-16
+
 ### Added
 
+- Added `test:events:offline`, an eight-case stream compatibility baseline,
+  and `test:offline` to run both focused suites without dependency installation.
+- Expanded the synthetic-fixture inventory and verification limitations.
 - Added the separate `campaignTemplates` visual-design resource with catalog
   search, CRUD, clone, adapt, generate, and create-campaign-from-template APIs.
 - Added explicit `campaignTemplates.favorite()` and `.unfavorite()` helpers for
