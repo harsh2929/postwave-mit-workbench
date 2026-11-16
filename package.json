@@ -1,6 +1,6 @@
 {
   "name": "@moosewave/sdk-workbench",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Existing Moosewave TypeScript SDK, isolated with API contract fixtures and offline verification.",
   "keywords": [
     "postwave",
@@ -62,7 +62,11 @@
     "verify": "npm run lint && npm run typecheck && npm run generate:operations:check && npm run test && npm run build && npm run test:package && npm run audit:bundle",
     "test:package": "node --test scripts/package-exports.test.mjs",
     "audit:bundle": "python3 scripts/audit-bundle.py",
-    "test:lifecycle:offline": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./scripts/offline/register-ts.mjs --import ./tests/offline.setup.ts --test tests/offline/lifecycle.offline.ts"
+    "test:lifecycle:offline": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./scripts/offline/register-ts.mjs --import ./tests/offline.setup.ts --test tests/offline/lifecycle.offline.ts",
+    "test:events:offline": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./scripts/offline/register-ts.mjs --import ./tests/offline.setup.ts --test tests/offline/events.offline.ts",
+    "test:offline": "npm run --offline test:lifecycle:offline && npm run --offline test:events:offline",
+    "diagnose:events:offline": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./scripts/offline/register-ts.mjs --import ./tests/offline.setup.ts scripts/diagnose-events-stream.mjs",
+    "check:events:offline": "npm run --offline diagnose:events:offline -- --check"
   },
   "dependencies": {},
   "devDependencies": {

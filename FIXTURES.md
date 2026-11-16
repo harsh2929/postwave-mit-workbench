@@ -27,3 +27,18 @@ The contact helper joins a local fixture label and the reserved example domain;
 there is no contact-shaped template literal. The optional signed-conversion
 setup snippet has been removed from the reference documentation. It is not
 needed for local verification or the remaining request-lifecycle work.
+
+## Retained synthetic data inventory
+
+- Reserved-domain contacts constructed by `fixtureEmail()` in tests and local
+  example programs. They are not personal contact details or real accounts.
+- `TEST-ONLY-` values constructed by `syntheticCredential()`, short dummy auth
+  strings, mock signing inputs and repeated-character IDs used to validate
+  payload and signature behavior. None grants access to a service.
+- Synthetic event timestamps, campaign/subscriber IDs and metadata used by
+  the streaming tests and diagnostics. No customer events are included.
+- Fixed OpenAPI and service-contract records used for offline contract checks.
+
+This inventory describes retained dummy values; a clean secret scan does not
+mean the project contains no test data. Tests and diagnostics use mock
+transports, with unmocked socket access blocked by tests/offline.setup.ts.

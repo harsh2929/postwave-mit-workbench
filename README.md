@@ -70,6 +70,27 @@ which is unchanged.
 The semantics are documented under "Timeouts, budgets and cancellation" in
 [SDK-REFERENCE.md](SDK-REFERENCE.md).
 
+### Event-stream baseline and offline diagnostics
+
+```sh
+npm run --offline test:events:offline
+npm run --offline diagnose:events:offline
+```
+
+The seven compatibility tests pass on this baseline. The diagnostic reports
+five open streaming defects using only mock transports: split CRLF framing,
+discarding an oversized frame, pre-aborted requests, cancellation during a
+stalled read and HTTP-error reader release. No server or account is needed.
+
+`npm run --offline check:events:offline` runs the same diagnostic in strict
+mode and **currently exits 1**. A failure is expected on this starting version;
+it is not part of `verify`. Fixing those defects should make it exit 0. The
+diagnostic is a reproduction aid, not complete coverage of stream correctness.
+
+`npm run --offline test:offline` runs both passing offline suites, currently
+22 cases in total. Their scope and limitations, and the authoritative full
+suite, are described in [VERIFYING.md](VERIFYING.md).
+
 See [SDK-REFERENCE.md](SDK-REFERENCE.md) for the original client API, and [FIXTURES.md](FIXTURES.md) for the test-data and pinned-contract boundary. Library examples that target a live service are reference code; they are not run by verification and require credentials supplied by the operator.
 
 ## Upload contents
