@@ -248,7 +248,9 @@ describe("error mapping", () => {
     await expect(
       pw.request("GET", "/api/v1/subscribers", { signal: ac.signal }),
     ).rejects.toBeInstanceOf(RequestAbortedError);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    // A cancelled request is never handed to the transport: a custom fetch
+    // that ignores its signal would otherwise still send it.
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("aborts while waiting for retry backoff", async () => {

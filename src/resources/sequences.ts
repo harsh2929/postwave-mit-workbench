@@ -1,5 +1,9 @@
 import { Resource } from "./_base.js";
-import { RequestAbortedError } from "../errors.js";
+import {
+  normalizePollInterval,
+  normalizeWaitTimeout,
+  pollUntilTerminal,
+} from "../lib/polling.js";
 import type {
   GeneratedEmail,
   GenerateRequest,
@@ -56,8 +60,18 @@ export interface SequenceJobAck {
 }
 
 export interface SequenceWaitOptions {
+  /** Delay between polls in ms. Default 2000, capped at 30000. */
   intervalMs?: number;
+  /**
+   * Overall wait deadline in ms. Default 5 minutes, capped at 30 minutes.
+   * It bounds the whole wait, including an in-flight poll request and its
+   * body read. Expiry rejects with `TimeoutError` (`scope: "wait"`).
+   */
   timeoutMs?: number;
+  /**
+   * Cancel the wait at any point, including mid-poll. Rejects with
+   * `RequestAbortedError`; an already-aborted signal sends no request.
+   */
   signal?: AbortSignal;
 }
 
@@ -219,23 +233,25 @@ export class SequencesResource extends Resource {
    * resolving with the final job. Caller decides what to do with
    * `failed`. Backoff is constant 2s; the typical Gemini run lands
    * in 10-30s so 5-15 polls.
+   *
+   * The `timeoutMs` deadline and `signal` bound the whole wait, including
+   * an in-flight poll. Deadline expiry rejects with `TimeoutError`
+   * (`scope: "wait"`); caller cancellation with `RequestAbortedError`.
+   * Errors from a poll itself (e.g. `NotFoundError`, or a per-attempt
+   * `TimeoutError` after client retries) propagate unchanged.
    */
-  async waitForJob(
+  waitForJob(
     jobID: string,
     opts: SequenceWaitOptions = {},
   ): Promise<SequenceJob> {
-    const intervalMs = normalizePollInterval(opts.intervalMs);
-    const timeoutMs = normalizeWaitTimeout(opts.timeoutMs);
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (opts.signal?.aborted) throw new RequestAbortedError();
-      const job = await this.getJob(jobID, { signal: opts.signal });
-      if (job.status === "succeeded" || job.status === "failed") {
-        return job;
-      }
-      await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())), opts.signal);
-    }
-    throw new Error(`sequences.waitForJob(${jobID}): timed out after ${timeoutMs}ms`);
+    return pollUntilTerminal({
+      label: `sequences.waitForJob(${jobID})`,
+      intervalMs: normalizePollInterval(opts.intervalMs),
+      timeoutMs: normalizeWaitTimeout(opts.timeoutMs),
+      signal: opts.signal,
+      poll: (signal) => this.getJob(jobID, { signal }),
+      isTerminal: (job) => job.status === "succeeded" || job.status === "failed",
+    });
   }
 
   update(
@@ -363,40 +379,9 @@ function sequenceQuery(query: SequenceParticipantsQuery): string {
   return encoded ? `?${encoded}` : "";
 }
 
-function normalizePollInterval(value: number | undefined): number {
-  if (value === undefined) return 2000;
-  if (!Number.isFinite(value) || value <= 0) return 2000;
-  return Math.min(Math.floor(value), 30_000);
-}
-
 export function sequencePositionPathSegment(position: number): string {
   if (!Number.isSafeInteger(position) || position < 1) {
     throw new Error("Sequence email position must be a positive integer");
   }
   return String(position);
-}
-
-function normalizeWaitTimeout(value: number | undefined): number {
-  if (value === undefined) return 5 * 60_000;
-  if (!Number.isFinite(value) || value <= 0) return 5 * 60_000;
-  return Math.min(Math.floor(value), 30 * 60_000);
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(new RequestAbortedError());
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      cleanup();
-      reject(new RequestAbortedError());
-    };
-    const cleanup = (): void => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }

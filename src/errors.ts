@@ -193,17 +193,52 @@ export class NetworkError extends PostwaveError {
   }
 }
 
+/**
+ * Which SDK-owned deadline expired.
+ *
+ * - `attempt`: the client `timeoutMs` for ONE wire attempt (connect, headers
+ *   and body read). May have been retried before it surfaced.
+ * - `total`: the `totalTimeoutMs` budget for the whole request, covering every
+ *   attempt, body read and backoff sleep. Never retried.
+ * - `wait`: the `timeoutMs` of a polling helper such as
+ *   `sequences.waitForJob()` / `voiceProfile.waitForIngestJob()`.
+ */
+export type TimeoutScope = "attempt" | "total" | "wait";
+
+/**
+ * An SDK-owned deadline expired. Cancellation through the CALLER's own
+ * AbortSignal is never a TimeoutError — see RequestAbortedError.
+ */
 export class TimeoutError extends NetworkError {
-  constructor(opts: { message?: string; payload?: unknown } = {}) {
+  /** Which deadline expired. Defaults to `attempt` for direct construction. */
+  readonly scope: TimeoutScope;
+  /** The configured length of that deadline, when known. */
+  readonly timeoutMs: number | undefined;
+  constructor(
+    opts: {
+      message?: string;
+      payload?: unknown;
+      scope?: TimeoutScope;
+      timeoutMs?: number;
+    } = {},
+  ) {
     super({
       message: opts.message ?? "Request timed out",
       code: "request_timeout",
       payload: opts.payload,
     });
     this.name = "TimeoutError";
+    this.scope = opts.scope ?? "attempt";
+    this.timeoutMs = opts.timeoutMs;
   }
 }
 
+/**
+ * The caller cancelled the operation through the AbortSignal they supplied.
+ * `payload` carries the signal's abort reason. This is reported even when the
+ * caller's signal came from `AbortSignal.timeout()`: the deadline belonged to
+ * the caller, so the SDK reports it as their cancellation.
+ */
 export class RequestAbortedError extends NetworkError {
   constructor(opts: { message?: string; payload?: unknown } = {}) {
     super({

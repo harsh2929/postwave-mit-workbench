@@ -27,6 +27,49 @@ npm run typecheck
 npm run build
 ```
 
+### Request-lifecycle checks: two levels
+
+Request lifecycle covers per-attempt timeouts, the optional overall budget,
+caller cancellation, clock corrections, a blocked event loop, overlapping
+calls and resource release, in the client and all three polling helpers. It is
+checked at two levels. They are not interchangeable, so report them
+separately.
+
+**1. Full verification (authoritative; needs installed dependencies).**
+`npm run verify` above includes the complete deterministic fake-timer suites.
+To run just those after `npm ci`:
+
+```sh
+npm test -- tests/request-lifecycle.test.ts tests/waiters.test.ts tests/errors.test.ts tests/retry.test.ts
+```
+
+**2. Focused offline checks (no dependencies, no network).** For a sandbox
+where `npm ci` cannot run (for example `eslint: not found` from `verify`):
+
+```sh
+npm run --offline test:lifecycle:offline
+```
+
+This needs only Node.js 22.18 or later. It runs
+`tests/offline/lifecycle.offline.ts` on Node's built-in test runner,
+directly against the TypeScript source (`--experimental-transform-types` plus
+the resolve hook in `scripts/offline/`), with the same unmocked-network
+block. The 15 cases use real timers, take about 10 s, and cover: cancellation
+inside `onResponseHeaders` on a 204; cancellation and per-attempt timeout on
+a stalled body; forward and backward wall-clock jumps; a blocked event loop
+against a request budget and against all three waiters;
+`campaignTemplates.waitForDesign()`'s stalled-poll deadline, listener
+release and server retry hint; and overlapping calls.
+
+A passing offline run is **not** a passing `verify`. It does not lint,
+type-check, build, check generated contracts or package exports, or run the
+rest of the suite, including the fake-timer lifecycle cases that assert
+exact timing, timer counts and listener counts. It is not part of `verify`,
+which is unchanged.
+
+The semantics are documented under "Timeouts, budgets and cancellation" in
+[SDK-REFERENCE.md](SDK-REFERENCE.md).
+
 See [SDK-REFERENCE.md](SDK-REFERENCE.md) for the original client API, and [FIXTURES.md](FIXTURES.md) for the test-data and pinned-contract boundary. Library examples that target a live service are reference code; they are not run by verification and require credentials supplied by the operator.
 
 ## Upload contents

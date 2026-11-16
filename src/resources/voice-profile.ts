@@ -1,5 +1,9 @@
 import { Resource } from "./_base.js";
-import { RequestAbortedError } from "../errors.js";
+import {
+  normalizePollInterval,
+  normalizeWaitTimeout,
+  pollUntilTerminal,
+} from "../lib/polling.js";
 import type { RegisterVoiceSource, VoiceProfile, VoiceSource } from "../types.js";
 
 /**
@@ -20,8 +24,18 @@ export interface IngestJob {
 }
 
 export interface IngestWaitOptions {
+  /** Delay between polls in ms. Default 2000, capped at 30000. */
   intervalMs?: number;
+  /**
+   * Overall wait deadline in ms. Default 5 minutes, capped at 30 minutes.
+   * It bounds the whole wait, including an in-flight poll request and its
+   * body read. Expiry rejects with `TimeoutError` (`scope: "wait"`).
+   */
   timeoutMs?: number;
+  /**
+   * Cancel the wait at any point, including mid-poll. Rejects with
+   * `RequestAbortedError`; an already-aborted signal sends no request.
+   */
   signal?: AbortSignal;
 }
 
@@ -69,59 +83,27 @@ export class VoiceProfileResource extends Resource {
 
   /**
    * Convenience: poll until terminal. Constant 2s backoff, 5 min
-   * timeout. Same shape as SequencesResource.waitForJob.
+   * timeout. Same shape and lifecycle guarantees as
+   * SequencesResource.waitForJob: the deadline and `signal` bound an
+   * in-flight poll, expiry rejects with `TimeoutError` (`scope: "wait"`),
+   * and cancellation rejects with `RequestAbortedError`.
    */
-  async waitForIngestJob(
+  waitForIngestJob(
     sourceID: string,
     jobID: string,
     opts: IngestWaitOptions = {},
   ): Promise<IngestJob> {
-    const intervalMs = normalizePollInterval(opts.intervalMs);
-    const timeoutMs = normalizeWaitTimeout(opts.timeoutMs);
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (opts.signal?.aborted) throw new RequestAbortedError();
-      const job = await this.getIngestJob(sourceID, jobID, { signal: opts.signal });
-      if (job.status === "succeeded" || job.status === "failed") {
-        return job;
-      }
-      await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())), opts.signal);
-    }
-    throw new Error(`voice.waitForIngestJob(${jobID}): timed out after ${timeoutMs}ms`);
+    return pollUntilTerminal({
+      label: `voice.waitForIngestJob(${jobID})`,
+      intervalMs: normalizePollInterval(opts.intervalMs),
+      timeoutMs: normalizeWaitTimeout(opts.timeoutMs),
+      signal: opts.signal,
+      poll: (signal) => this.getIngestJob(sourceID, jobID, { signal }),
+      isTerminal: (job) => job.status === "succeeded" || job.status === "failed",
+    });
   }
 
   removeSource(id: string): Promise<void> {
     return this.client.request("DELETE", `/api/v1/voice/sources/${encodeURIComponent(id)}`);
   }
-}
-
-function normalizePollInterval(value: number | undefined): number {
-  if (value === undefined) return 2000;
-  if (!Number.isFinite(value) || value <= 0) return 2000;
-  return Math.min(Math.floor(value), 30_000);
-}
-
-function normalizeWaitTimeout(value: number | undefined): number {
-  if (value === undefined) return 5 * 60_000;
-  if (!Number.isFinite(value) || value <= 0) return 5 * 60_000;
-  return Math.min(Math.floor(value), 30 * 60_000);
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(new RequestAbortedError());
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      cleanup();
-      reject(new RequestAbortedError());
-    };
-    const cleanup = (): void => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }

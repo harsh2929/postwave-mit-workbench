@@ -19,11 +19,17 @@ import {
   ParseError,
   PostwaveError,
   RateLimitError,
-  RequestAbortedError,
   responseMetadataFromHeaders,
   ServerError,
   TimeoutError,
 } from "./errors.js";
+import {
+  AbortScope,
+  discardBody,
+  MAX_TIMER_DELAY_MS,
+  raceAbort,
+  sleep,
+} from "./lib/lifecycle.js";
 import { MigrationsResource } from "./resources/migrations.js";
 import { SubscribersResource } from "./resources/subscribers.js";
 import { SequencesResource } from "./resources/sequences.js";
@@ -133,9 +139,23 @@ export interface PostwaveClientOptions {
   credentials?: RequestCredentials;
   /** Override fetch (handy for testing or running on edge runtimes). */
   fetch?: FetchFn;
-  /** Per-call timeout in ms. Default 30s. */
+  /**
+   * Per-ATTEMPT timeout in ms, covering connect, response headers AND the
+   * response body read. Each retry gets a fresh timer. Default 30s; values
+   * that are not positive finite numbers fall back to the default, and values
+   * above 120s are clamped.
+   */
   timeoutMs?: number;
-  /** Number of retries on 429/5xx. Default 3. */
+  /**
+   * Optional overall budget in ms for a whole `request()`: every attempt, body
+   * read and retry backoff sleep. Expiry rejects with a `TimeoutError` whose
+   * `scope` is `"total"` and is never retried. Off by default, so a request
+   * is bounded only per attempt as before. Override per call with
+   * `RequestOptions.totalTimeoutMs`. Must be a positive finite number (the
+   * constructor throws otherwise); values above 2^31-1 ms are clamped.
+   */
+  totalTimeoutMs?: number;
+  /** Number of retries on 429/5xx and transport failures. Default 3. */
   retries?: number;
   /** Default headers added to every request. */
   defaultHeaders?: Record<string, string>;
@@ -147,7 +167,23 @@ export interface RequestOptions {
   /** Raw request body for non-JSON uploads (CSV, blobs, form-data). */
   rawBody?: BodyInit;
   headers?: Record<string, string>;
+  /**
+   * Cancel the call at any point: while connecting, while reading the
+   * response body, or during a retry backoff. Rejects with
+   * `RequestAbortedError` (never `TimeoutError`), is never retried, and
+   * cancels an in-progress body read. A signal that is already aborted
+   * rejects without calling the transport at all.
+   */
   signal?: AbortSignal;
+  /**
+   * Overall budget in ms for this call, overriding the client-wide
+   * `totalTimeoutMs`. Pass `null` to run this call with no overall budget
+   * even when the client has one. The per-attempt `timeoutMs` and the retry
+   * policy still apply inside the budget. When the next backoff would not fit
+   * in what remains, the last attempt's error is thrown immediately instead of
+   * waiting out the budget.
+   */
+  totalTimeoutMs?: number | null;
   /**
    * Maximum wire attempts for this call, including the first attempt.
    *
@@ -253,6 +289,15 @@ const MAX_ERROR_TEXT_BYTES = 64 * 1024;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_RETRIES = 10;
 
+type AttemptOutcome<T> =
+  | { ok: true; value: T }
+  | {
+      ok: false;
+      error: PostwaveError;
+      retryable: boolean;
+      retryAfterHeader: string | null;
+    };
+
 /**
  * The main client. Holds connection config + sub-resource accessors.
  */
@@ -264,6 +309,8 @@ export class PostwaveClient {
   readonly tenantSlug: string | undefined;
   readonly retries: number;
   readonly timeoutMs: number;
+  /** Client-wide overall request budget; undefined means none. */
+  readonly totalTimeoutMs: number | undefined;
   readonly credentials: RequestCredentials | undefined;
 
   private readonly fetchImpl: FetchFn;
@@ -375,6 +422,10 @@ export class PostwaveClient {
     this.tenantSlug = opts.tenantSlug;
     this.retries = normalizeRetries(opts.retries);
     this.timeoutMs = normalizeTimeoutMs(opts.timeoutMs);
+    this.totalTimeoutMs = normalizeTotalTimeoutMs(
+      opts.totalTimeoutMs,
+      "PostwaveClient: totalTimeoutMs",
+    );
     this.credentials = opts.credentials;
     this.fetchImpl = opts.fetch ?? (globalThis.fetch as FetchFn);
     if (!this.fetchImpl) {
@@ -460,8 +511,16 @@ export class PostwaveClient {
 
   /**
    * Low-level request. Handles auth, tenant header, JSON serialization,
-   * timeout, retry-on-429/5xx with exponential backoff + Retry-After
-   * honoring, and typed-error mapping.
+   * per-attempt timeout, optional overall budget, caller cancellation,
+   * retry-on-429/5xx with exponential backoff + Retry-After honoring, and
+   * typed-error mapping.
+   *
+   * Lifecycle: a request scope links the caller's signal with the optional
+   * overall budget. Each attempt runs in a child scope that adds the
+   * per-attempt timer. The child scope spans the fetch, the 304 cache-bust
+   * refetch and the body read, so no phase of an attempt is unbounded.
+   * Backoff sleeps run under the request scope. Every scope releases its timer
+   * and listener when the call settles.
    */
   async request<T>(
     method: string,
@@ -549,167 +608,280 @@ export class PostwaveClient {
     };
     if (opts.redirect !== undefined) init.redirect = opts.redirect;
     if (this.credentials) init.credentials = this.credentials;
-    if (opts.signal) init.signal = opts.signal;
 
+    const totalTimeoutMs =
+      opts.totalTimeoutMs === null
+        ? undefined
+        : opts.totalTimeoutMs === undefined
+          ? this.totalTimeoutMs
+          : normalizeTotalTimeoutMs(
+              opts.totalTimeoutMs,
+              "PostwaveClient.request: totalTimeoutMs",
+            );
     const requestRetries =
       normalizeMaxAttempts(opts.maxAttempts, this.retries) - 1;
-    let lastErr: unknown;
-    for (let attempt = 0; attempt <= requestRetries; attempt++) {
-      const ac = new AbortController();
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        ac.abort();
-      }, this.timeoutMs);
-      // If caller supplied a signal, abort our controller when theirs fires.
-      const userSignal = opts.signal;
-      const onUserAbort = () => ac.abort();
-      if (userSignal) {
-        if (userSignal.aborted) ac.abort();
-        else userSignal.addEventListener("abort", onUserAbort);
-      }
 
-      try {
-        let resp = await this.fetchImpl(url, { ...init, signal: ac.signal });
+    // Caller cancellation + optional overall budget, for the whole call.
+    const requestScope = new AbortScope({
+      parent: opts.signal,
+      timeoutMs: totalTimeoutMs,
+      timeoutScope: "total",
+    });
+    // SETTLE GATE. Nothing settles once the caller has cancelled or the
+    // budget has passed by the clock, whatever the attempt produced: a
+    // success, a mapped HTTP error or an exhausted-retry failure. This is
+    // checked at settle time, not only when a timer fires, because a timer
+    // callback can run after a fast continuation has already finished (see
+    // AbortScope.sync). A per-attempt overrun alone does not discard a
+    // COMPLETE result: that timer exists to detect stalls, and retrying
+    // would repeat work the server already did.
+    const settle = (err: PostwaveError): PostwaveError =>
+      requestScope.sync() ? requestScope.error() : err;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        // Never hand an already-cancelled or out-of-budget request to the
+        // transport: a custom fetch that ignores its signal would send it.
+        // Checked against the clock, not just the timer (AbortScope.sync).
+        if (requestScope.sync()) throw requestScope.error();
 
-        // ── SURVIVE A 304 THE PLATFORM CACHE PRODUCED BEHIND OUR BACK ──────
-        //
-        // `cache: "no-store"` above is the correct instruction and browsers
-        // honour it. REACT NATIVE DOES NOT: its fetch is a polyfill over
-        // RCTNetworking/NSURLSession that silently drops the option, so on iOS
-        // the URL cache still revalidates with If-None-Match and the server
-        // answers 304 WITH A ZERO-BYTE BODY.
-        //
-        // We cannot serve that 304 -- this client holds no body cache, the
-        // callers do -- and `resp.ok` is false for 304, so without this the
-        // response falls into mapError as `ApiError: HTTP 304` and a healthy
-        // read becomes a failed query. Measured on a simulator: the dashboard
-        // loaded at 200/908 bytes and every refetch after was a 0-byte 304.
-        //
-        // A cache-busting parameter is the only lever RN leaves us: it changes
-        // the cache KEY, so there is no stored entry to revalidate against and
-        // the server must send a full body. Retried once, only for safe
-        // methods, and only when a 304 actually arrives -- so the extra round
-        // trip is paid on the revalidation path alone, never on a first load.
-        if (resp.status === 304 && CACHE_SAFE_METHODS.has(upperMethod)) {
-          const bust = this.buildUrl(path, {
-            ...(opts.query ?? {}),
-            _cb: `${Date.now()}-${attempt}`,
+        // When the attempt timeout reaches past the remaining budget, let the
+        // budget alone bound this attempt so its expiry reports as "total".
+        const remaining = requestScope.remainingMs();
+        const attemptScope = new AbortScope({
+          parent: requestScope.signal,
+          timeoutMs:
+            remaining !== undefined && remaining <= this.timeoutMs
+              ? undefined
+              : this.timeoutMs,
+          timeoutScope: "attempt",
+        });
+
+        let failure: PostwaveError;
+        let delayMs: number;
+        try {
+          const outcome = await this.attempt<T>(
+            url,
+            path,
+            upperMethod,
+            init,
+            opts,
+            attempt,
+            attemptScope,
+          );
+          if (outcome.ok) {
+            // Settle gate for successes: covers cancellation from inside
+            // onResponseHeaders (a 204 reads no body, so nothing else would
+            // notice) and a budget that passed while the loop was blocked.
+            if (requestScope.sync()) throw requestScope.error();
+            return outcome.value;
+          }
+          if (!outcome.retryable) throw outcome.error;
+          failure = outcome.error;
+          delayMs = computeBackoff({
+            attempt,
+            retryAfterSecondsHeader: outcome.retryAfterHeader,
+            retryAfterSecondsBody:
+              failure instanceof RateLimitError
+                ? failure.retryAfterSeconds
+                : undefined,
           });
-          resp = await this.fetchImpl(bust, { ...init, signal: ac.signal });
-        }
-        clearTimeout(timer);
-        if (userSignal) userSignal.removeEventListener("abort", onUserAbort);
-
-        const requestId = resp.headers.get("x-request-id") ?? undefined;
-        const responseMetadata = responseMetadataFromHeaders(resp.headers);
-
-        if (resp.ok) {
-          if (
-            opts.expectedStatus !== undefined &&
-            resp.status !== opts.expectedStatus
-          ) {
-            throw new ParseError({
-              status: resp.status,
-              payload: `expected HTTP ${opts.expectedStatus}`,
-              requestId,
-              responseMetadata,
-            });
-          }
-          opts.onResponseHeaders?.(resp.headers);
-          if (resp.status === 204) return undefined as T;
-          if (opts.asText) {
-            return (await readTextLimited(
-              resp,
-              MAX_RESPONSE_TEXT_BYTES,
-            )) as unknown as T;
-          }
-          const ct = resp.headers.get("content-type") ?? "";
-          const text = await readTextLimited(resp, MAX_RESPONSE_TEXT_BYTES);
-          if (!text) return undefined as T;
-          if (isJSONMediaType(ct)) {
-            try {
-              return JSON.parse(text) as T;
-            } catch {
-              throw new ParseError({
-                status: resp.status,
-                payload: text,
-                requestId,
-                responseMetadata,
-              });
+        } catch (e) {
+          if (e instanceof PostwaveError) throw settle(e);
+          if (attemptScope.sync()) {
+            // Classified by which scope fired, not by what the transport threw.
+            const aborted = attemptScope.error();
+            // Caller cancellation and an exhausted budget end the call. Only
+            // an expired per-attempt timer is a retryable transport failure.
+            if (!(aborted instanceof TimeoutError) || aborted.scope !== "attempt") {
+              throw aborted;
             }
+            failure = aborted;
+          } else {
+            const message =
+              e instanceof Error && e.message
+                ? e.message
+                : "Network request failed";
+            failure = new NetworkError({ message, payload: e });
           }
-          // A caller that did NOT ask for text is expecting JSON, so a
-          // non-JSON body is a protocol failure and not a value.
-          //
-          // Returning the raw text here typed it as whatever the method
-          // declared, which is silent and catastrophic: a reverse proxy that
-          // answers 200 text/html for an absent upstream (an SPA fallback)
-          // made `migrations.list(): Promise<MigrationJob[]>` hand back an
-          // HTML STRING. The screen then read `.length` off it and rendered
-          // ONE JOB PER CHARACTER -- 1,293 phantom rows, every `id` undefined,
-          // every React key identical, and a red-screen from the first
-          // `job.id.slice()`. Observed in-app on 2026-08-19.
-          //
-          // ParseError already carries the status and payload, so the caller
-          // can see exactly what arrived instead of guessing.
+          delayMs = computeBackoff({ attempt });
+        } finally {
+          attemptScope.dispose();
+        }
+
+        // Retry only when the server can recognise a repeat (retryIsSafe),
+        // attempts remain, and the backoff fits inside the remaining budget.
+        // A timeout says nothing about whether a write committed, which is why
+        // the retryIsSafe gate applies to it exactly as to a 5xx.
+        if (attempt >= requestRetries || !retryIsSafe) throw settle(failure);
+        const budgetLeft = requestScope.remainingMs();
+        if (budgetLeft !== undefined && delayMs >= budgetLeft) {
+          throw settle(failure);
+        }
+        try {
+          await sleep(delayMs, requestScope.signal);
+        } catch {
+          throw requestScope.error();
+        }
+      }
+    } finally {
+      requestScope.dispose();
+    }
+  }
+
+  /**
+   * One wire attempt: fetch (plus the 304 cache-bust refetch) and the full
+   * body read, all bounded by `scope`. Returns the parsed success value or
+   * the mapped HTTP error. Transport, timeout and cancellation failures
+   * throw; a PostwaveError thrown from here is final and never retried.
+   */
+  private async attempt<T>(
+    url: string,
+    path: string,
+    upperMethod: string,
+    init: RequestInit,
+    opts: RequestOptions,
+    attempt: number,
+    scope: AbortScope,
+  ): Promise<AttemptOutcome<T>> {
+    const signal = scope.signal;
+    let resp = await this.fetchWithin(url, init, scope);
+
+    // ── SURVIVE A 304 THE PLATFORM CACHE PRODUCED BEHIND OUR BACK ──────
+    //
+    // `cache: "no-store"` above is the correct instruction and browsers
+    // honour it. REACT NATIVE DOES NOT: its fetch is a polyfill over
+    // RCTNetworking/NSURLSession that silently drops the option, so on iOS
+    // the URL cache still revalidates with If-None-Match and the server
+    // answers 304 WITH A ZERO-BYTE BODY.
+    //
+    // We cannot serve that 304 -- this client holds no body cache, the
+    // callers do -- and `resp.ok` is false for 304, so without this the
+    // response falls into mapError as `ApiError: HTTP 304` and a healthy
+    // read becomes a failed query. Measured on a simulator: the dashboard
+    // loaded at 200/908 bytes and every refetch after was a 0-byte 304.
+    //
+    // A cache-busting parameter is the only lever RN leaves us: it changes
+    // the cache KEY, so there is no stored entry to revalidate against and
+    // the server must send a full body. Retried once, only for safe
+    // methods, and only when a 304 actually arrives -- so the extra round
+    // trip is paid on the revalidation path alone, never on a first load.
+    if (resp.status === 304 && CACHE_SAFE_METHODS.has(upperMethod)) {
+      discardBody(resp);
+      const bust = this.buildUrl(path, {
+        ...(opts.query ?? {}),
+        _cb: `${Date.now()}-${attempt}`,
+      });
+      resp = await this.fetchWithin(bust, init, scope);
+    }
+
+    try {
+      const requestId = resp.headers.get("x-request-id") ?? undefined;
+      const responseMetadata = responseMetadataFromHeaders(resp.headers);
+
+      if (resp.ok) {
+        if (
+          opts.expectedStatus !== undefined &&
+          resp.status !== opts.expectedStatus
+        ) {
           throw new ParseError({
             status: resp.status,
-            payload: text,
+            payload: `expected HTTP ${opts.expectedStatus}`,
             requestId,
             responseMetadata,
           });
         }
-
-        const body = await safeReadBody(resp);
-        const err = mapError(resp.status, body, requestId, resp.headers);
-
-        // Retry policy: 429 + 5xx (except 501 Not Implemented).
-        if (
-          attempt < requestRetries &&
-          retryIsSafe &&
-          (err instanceof RateLimitError ||
-            (err instanceof ServerError && err.status !== 501))
-        ) {
-          const delay = computeBackoff({
-            attempt,
-            retryAfterSecondsHeader: resp.headers.get("retry-after"),
-            retryAfterSecondsBody:
-              err instanceof RateLimitError ? err.retryAfterSeconds : undefined,
-          });
-          await sleep(delay, opts.signal);
-          lastErr = err;
-          continue;
+        // Caller code: it may cancel. The settle gate in request() sees that
+        // before any result is returned, including a body-less 204.
+        opts.onResponseHeaders?.(resp.headers);
+        if (resp.status === 204) return { ok: true, value: undefined as T };
+        if (opts.asText) {
+          const text = await readTextLimited(
+            resp,
+            MAX_RESPONSE_TEXT_BYTES,
+            signal,
+          );
+          return { ok: true, value: text as unknown as T };
         }
-        throw err;
-      } catch (e) {
-        clearTimeout(timer);
-        if (userSignal) userSignal.removeEventListener("abort", onUserAbort);
-        if (e instanceof PostwaveError) throw e;
-        const transportError = mapTransportError(e, {
-          timedOut,
-          userAborted: Boolean(userSignal?.aborted && !timedOut),
+        const ct = resp.headers.get("content-type") ?? "";
+        const text = await readTextLimited(
+          resp,
+          MAX_RESPONSE_TEXT_BYTES,
+          signal,
+        );
+        if (!text) return { ok: true, value: undefined as T };
+        if (isJSONMediaType(ct)) {
+          try {
+            return { ok: true, value: JSON.parse(text) as T };
+          } catch {
+            throw new ParseError({
+              status: resp.status,
+              payload: text,
+              requestId,
+              responseMetadata,
+            });
+          }
+        }
+        // A caller that did NOT ask for text is expecting JSON, so a
+        // non-JSON body is a protocol failure and not a value.
+        //
+        // Returning the raw text here typed it as whatever the method
+        // declared, which is silent and catastrophic: a reverse proxy that
+        // answers 200 text/html for an absent upstream (an SPA fallback)
+        // made `migrations.list(): Promise<MigrationJob[]>` hand back an
+        // HTML STRING. The screen then read `.length` off it and rendered
+        // ONE JOB PER CHARACTER -- 1,293 phantom rows, every `id` undefined,
+        // every React key identical, and a red-screen from the first
+        // `job.id.slice()`. Observed in-app on 2026-08-19.
+        //
+        // ParseError already carries the status and payload, so the caller
+        // can see exactly what arrived instead of guessing.
+        throw new ParseError({
+          status: resp.status,
+          payload: text,
+          requestId,
+          responseMetadata,
         });
-        if (transportError instanceof RequestAbortedError) {
-          throw transportError;
-        }
-        // Network/timeout error — retry with backoff, then bail. Gated on
-        // retryIsSafe for the same reason as the status path above, and it
-        // matters more here: a timeout says nothing about whether the server
-        // processed the request.
-        if (attempt < requestRetries && retryIsSafe) {
-          await sleep(computeBackoff({ attempt }), opts.signal);
-          lastErr = transportError;
-          continue;
-        }
-        throw transportError;
       }
+
+      const body = await safeReadBody(resp, signal);
+      const err = mapError(resp.status, body, requestId, resp.headers);
+      // Retry policy: 429 + 5xx (except 501 Not Implemented).
+      return {
+        ok: false,
+        error: err,
+        retryable:
+          err instanceof RateLimitError ||
+          (err instanceof ServerError && err.status !== 501),
+        retryAfterHeader: resp.headers.get("retry-after"),
+      };
+    } finally {
+      // Whatever path left this attempt, a body nobody read is released.
+      discardBody(resp);
     }
-    // Should be unreachable; surface the last seen error if it slips through.
-    throw (
-      lastErr ??
-      new PostwaveError("exhausted retries", { status: 0, code: "exhausted" })
-    );
+  }
+
+  /**
+   * Call the transport bounded by `signal`. The race matters for transports
+   * that ignore their signal: the attempt still ends on time, and a response
+   * that arrives after we gave up has its body cancelled rather than leaked.
+   */
+  private fetchWithin(
+    url: string,
+    init: RequestInit,
+    scope: AbortScope,
+  ): Promise<Response> {
+    // Every wire request, whether initial, retry or 304 cache-bust, starts
+    // only while this attempt and every SDK-owned ancestor (request budget,
+    // waiter deadline) are alive by the clock.
+    const signal = scope.signal;
+    if (scope.sync()) return Promise.reject(signal.reason);
+    let pending: Promise<Response>;
+    try {
+      pending = Promise.resolve(this.fetchImpl(url, { ...init, signal }));
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return raceAbort(pending, signal, discardBody);
   }
 
   private buildUrl(
@@ -889,27 +1061,18 @@ function safeHeaderValue(value: string): boolean {
   );
 }
 
-function mapTransportError(
-  err: unknown,
-  flags: { timedOut: boolean; userAborted: boolean },
-): NetworkError {
-  if (flags.timedOut) {
-    return new TimeoutError({ payload: err });
-  }
-  if (flags.userAborted) {
-    return new RequestAbortedError({ payload: err });
-  }
-  const message =
-    err instanceof Error && err.message
-      ? err.message
-      : "Network request failed";
-  return new NetworkError({ message, payload: err });
-}
-
-async function safeReadBody(resp: Response): Promise<unknown> {
+/**
+ * Read an error body for mapping. Decode failures degrade to `null` so the
+ * status still maps, but cancellation and timeouts must propagate: swallowing
+ * them would turn an interrupted read into a retryable 5xx.
+ */
+async function safeReadBody(
+  resp: Response,
+  signal: AbortSignal,
+): Promise<unknown> {
   try {
     const ct = resp.headers.get("content-type") ?? "";
-    const text = await readTextLimited(resp, MAX_ERROR_TEXT_BYTES);
+    const text = await readTextLimited(resp, MAX_ERROR_TEXT_BYTES, signal);
     if (!text) return undefined;
     if (isJSONMediaType(ct)) {
       try {
@@ -919,7 +1082,8 @@ async function safeReadBody(resp: Response): Promise<unknown> {
       }
     }
     return text;
-  } catch {
+  } catch (e) {
+    if (signal.aborted) throw e;
     return null;
   }
 }
@@ -929,9 +1093,15 @@ function isJSONMediaType(contentType: string): boolean {
   return mediaType === "application/json" || mediaType.endsWith("+json");
 }
 
+/**
+ * Read a body as text under a byte ceiling, abandoning it the moment `signal`
+ * aborts. The reader is always released: cancelled when the read did not run
+ * to completion (abort, overflow, stream error), then unlocked.
+ */
 async function readTextLimited(
   resp: Response,
   maxBytes: number,
+  signal: AbortSignal,
 ): Promise<string> {
   const contentLength = Number(resp.headers.get("content-length") || 0);
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
@@ -946,7 +1116,7 @@ async function readTextLimited(
   }
   if (!resp.body) {
     const read = resp.text.bind(resp);
-    const text = await read();
+    const text = await raceAbort(read(), signal);
     const byteLength = new TextEncoder().encode(text).byteLength;
     if (byteLength > maxBytes) {
       throw new PostwaveError(
@@ -965,46 +1135,36 @@ async function readTextLimited(
   const decoder = new TextDecoder();
   let total = 0;
   let out = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new PostwaveError(
-        "API response body exceeded the SDK safety limit.",
-        {
-          status: resp.status,
-          code: "response_too_large",
-          payload: { maxBytes, contentLength: total },
-        },
-      );
+  let complete = false;
+  try {
+    while (true) {
+      const { done, value } = await raceAbort(reader.read(), signal);
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new PostwaveError(
+          "API response body exceeded the SDK safety limit.",
+          {
+            status: resp.status,
+            code: "response_too_large",
+            payload: { maxBytes, contentLength: total },
+          },
+        );
+      }
+      out += decoder.decode(value, { stream: true });
     }
-    out += decoder.decode(value, { stream: true });
+    complete = true;
+  } finally {
+    if (!complete) reader.cancel().catch(() => undefined);
+    try {
+      reader.releaseLock();
+    } catch {
+      // Older stream implementations refuse while a read is pending; the
+      // cancel above already released the underlying source.
+    }
   }
   out += decoder.decode();
   return out;
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    return Promise.reject(new RequestAbortedError());
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      cleanup();
-      reject(new RequestAbortedError());
-    };
-    const cleanup = (): void => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 function normalizeRetries(value: number | undefined): number {
@@ -1028,6 +1188,21 @@ function normalizeTimeoutMs(value: number | undefined): number {
   if (value === undefined) return DEFAULT_TIMEOUT;
   if (!Number.isFinite(value) || value <= 0) return DEFAULT_TIMEOUT;
   return Math.min(Math.floor(value), MAX_TIMEOUT_MS);
+}
+
+function normalizeTotalTimeoutMs(
+  value: number | undefined,
+  label: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  // Unlike timeoutMs, an invalid budget is rejected rather than defaulted:
+  // silently dropping it would run the call with no overall bound at all.
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(
+      `${label} must be a positive, finite number of milliseconds`,
+    );
+  }
+  return Math.min(Math.ceil(value), MAX_TIMER_DELAY_MS);
 }
 
 /**
