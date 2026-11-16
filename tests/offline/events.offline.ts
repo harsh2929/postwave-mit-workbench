@@ -1,124 +1,165 @@
 // SPDX-License-Identifier: MIT
-// Dependency-free compatibility checks for the existing SSE API.
+/**
+ * Event-stream compatibility baseline using only Node's built-in test runner.
+ * Run npm run --offline test:events:offline without installing dependencies.
+ * This covers existing behavior, not complete SSE conformance or transport
+ * cancellation. Expand the regression coverage when stream behavior changes.
+ */
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { NotFoundError, PostwaveClient } from "../../src/index.js";
-import type { EventRecord, FetchFn } from "../../src/index.js";
+import type { EventRecord } from "../../src/resources/events.js";
 import { syntheticCredential } from "../fixture-data.js";
 
-const record: EventRecord = { ts: "2026-11-16T00:00:00Z", event_type: "opened" };
 const encoder = new TextEncoder();
+const opened = { ts: "2026-05-19T00:00:00Z", event_type: "opened" };
+const clicked = { ts: "2026-05-19T01:00:00Z", event_type: "clicked" };
+const frame = (record: unknown) => `data: ${JSON.stringify(record)}\n\n`;
 
-function response(chunks: Uint8Array[]): Response {
+function response(chunks: Uint8Array[], init: ResponseInit = {}): Response {
   return new Response(new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of chunks) controller.enqueue(chunk);
       controller.close();
     },
-  }), { headers: { "content-type": "text/event-stream" } });
-}
-
-function textResponse(...chunks: string[]): Response {
-  return response(chunks.map((chunk) => encoder.encode(chunk)));
-}
-
-function client(fetch: FetchFn): PostwaveClient {
-  return new PostwaveClient({ authMode: "none", retries: 0, fetch });
+  }), { headers: { "content-type": "text/event-stream" }, ...init });
 }
 
 async function collect(iterable: AsyncIterable<EventRecord>): Promise<EventRecord[]> {
-  const values: EventRecord[] = [];
-  for await (const value of iterable) values.push(value);
-  return values;
+  const records: EventRecord[] = [];
+  for await (const record of iterable) records.push(record);
+  return records;
 }
 
-describe("offline: event stream compatibility", { timeout: 5_000 }, () => {
-  test("retains configured transport, filters, credentials and authentication", async () => {
-    const key = syntheticCredential("stream-auth");
-    let requestUrl = "";
-    let requestInit: RequestInit | undefined;
-    const sdk = new PostwaveClient({
-      apiKey: key,
-      tenantId: "fixture-tenant",
+function clientFor(chunks: string[]): PostwaveClient {
+  return new PostwaveClient({
+    authMode: "none",
+    fetch: async () => response(chunks.map((chunk) => encoder.encode(chunk))),
+  });
+}
+
+describe("offline: event stream compatibility", { concurrency: 1 }, () => {
+  test("iteration uses the configured transport, filters and auth headers", async () => {
+    const calls: Array<{ input: unknown; init: RequestInit | undefined }> = [];
+    const apiKey = syntheticCredential("event-stream-header");
+    const client = new PostwaveClient({
+      apiKey,
+      tenantId: "tenant-fixture",
       credentials: "include",
-      defaultHeaders: { "X-Test-Client": "offline" },
-      fetch: async (url, init) => {
-        requestUrl = String(url);
-        requestInit = init;
-        return textResponse(`data: ${JSON.stringify(record)}\n\n`);
+      defaultHeaders: { "X-Postwave-Client": "fixture" },
+      fetch: async (input, init) => {
+        calls.push({ input, init });
+        return response([encoder.encode(frame(opened))]);
       },
     });
-    assert.deepEqual(await collect(sdk.events.stream({ event_type: "opened", campaign: "fixture-campaign" })), [record]);
-    const url = new URL(requestUrl);
+    const events = client.events.stream({ event_type: "opened", campaign: "campaign-fixture" });
+    assert.equal(calls.length, 0);
+    assert.deepEqual(await collect(events), [opened]);
+    assert.equal(calls.length, 1);
+    const call = calls[0]!;
+    const url = new URL(String(call.input));
     assert.equal(url.pathname, "/api/v1/events/stream");
     assert.equal(url.searchParams.get("event_type"), "opened");
-    assert.equal(url.searchParams.get("campaign"), "fixture-campaign");
-    const headers = new Headers(requestInit?.headers);
-    assert.equal(headers.get("accept"), "text/event-stream");
-    assert.equal(headers.get("authorization"), `Bearer ${key}`);
-    assert.equal(headers.get("x-tenant-slug"), "fixture-tenant");
-    assert.equal(headers.get("x-test-client"), "offline");
-    assert.equal(requestInit?.credentials, "include");
+    assert.equal(url.searchParams.get("campaign"), "campaign-fixture");
+    const headers = new Headers(call.init?.headers);
+    assert.equal(headers.get("Accept"), "text/event-stream");
+    assert.equal(headers.get("Authorization"), `Bearer ${apiKey}`);
+    assert.equal(headers.get("X-Tenant-Slug"), "tenant-fixture");
+    assert.equal(headers.get("X-Postwave-Client"), "fixture");
+    assert.equal(call.init?.credentials, "include");
   });
 
-  test("decodes multibyte UTF-8 when each byte arrives separately", async () => {
-    const expected = { ...record, metadata: { label: "café 🫎" } };
-    const bytes = encoder.encode(`data: ${JSON.stringify(expected)}\n\n`);
-    const chunks = Array.from(bytes, (_, index) => bytes.subarray(index, index + 1));
-    assert.deepEqual(await collect(client(async () => response(chunks)).events.stream()), [expected]);
+  test("joins LF data lines and ignores comments and unknown fields", async () => {
+    const client = clientFor([
+      ': heartbeat\nevent: opened\nignored: fixture\ndata: {"ts":"2026-05-19T00:00:00Z",\n',
+      'data: "event_type":"opened"}\n\n',
+    ]);
+    assert.deepEqual(await collect(client.events.stream()), [opened]);
   });
 
-  test("skips malformed records and comments while preserving later events", async () => {
-    const sdk = client(async () => textResponse(
-      ": fixture heartbeat\n\ndata: not-json\n\n",
-      'data: {"event_type":"opened"}\n\n',
-      `data: ${JSON.stringify({ ...record, metadata: [] })}\n\n`,
-      `data: ${JSON.stringify(record)}\n\n`,
-    ));
-    assert.deepEqual(await collect(sdk.events.stream()), [record]);
+  test("accepts complete CRLF-delimited frames", async () => {
+    const client = clientFor([frame(opened).replaceAll("\n", "\r\n")]);
+    assert.deepEqual(await collect(client.events.stream()), [opened]);
   });
 
-  test("retains the existing final-frame-at-EOF behavior", async () => {
-    const sdk = client(async () => textResponse(`data: ${JSON.stringify(record)}\n`));
-    assert.deepEqual(await collect(sdk.events.stream()), [record]);
+  test("keeps the existing complete-JSON-at-EOF compatibility behavior", async () => {
+    const client = clientFor([`data: ${JSON.stringify(clicked)}\n`]);
+    assert.deepEqual(await collect(client.events.stream()), [clicked]);
   });
 
-  test("maps HTTP errors and does not inherit automatic request retries", async () => {
-    let calls = 0;
-    const sdk = new PostwaveClient({ authMode: "none", retries: 4, fetch: async () => {
-      calls++;
-      return new Response('{"error":{"code":"missing_stream","message":"TEST-ONLY missing stream"}}', {
-        status: 404,
-        headers: { "content-type": "application/json", "x-request-id": "fixture-request" },
-      });
-    } });
-    await assert.rejects(collect(sdk.events.stream()), (error: unknown) => {
+  test("skips malformed, shape-invalid and complete oversized frames", async () => {
+    const client = clientFor([
+      "data: not-json\n\n",
+      frame({ ts: opened.ts }),
+      frame({ ...opened, metadata: [] }),
+      frame({ ...opened, metadata: { blob: "x".repeat(300_000) } }),
+      frame(clicked),
+    ]);
+    assert.deepEqual(await collect(client.events.stream()), [clicked]);
+  });
+
+  test("decodes UTF-8 when multibyte code points span transport chunks", async () => {
+    const record = { ...opened, metadata: { label: "café 🌊" } };
+    const bytes = encoder.encode(frame(record));
+    const client = new PostwaveClient({
+      authMode: "none",
+      fetch: async () => response(Array.from(bytes, (byte) => Uint8Array.of(byte))),
+    });
+    assert.deepEqual(await collect(client.events.stream()), [record]);
+  });
+
+  test("maps HTTP error status, code and request ID", async () => {
+    const client = new PostwaveClient({
+      authMode: "none",
+      fetch: async () => response([
+        encoder.encode(JSON.stringify({ error: { code: "missing_stream", message: "fixture missing" } })),
+      ], { status: 404, headers: { "content-type": "application/json", "x-request-id": "request-fixture" } }),
+    });
+    await assert.rejects(collect(client.events.stream()), (error: unknown) => {
       assert.ok(error instanceof NotFoundError);
       assert.equal(error.code, "missing_stream");
-      assert.equal(error.requestId, "fixture-request");
+      assert.equal(error.requestId, "request-fixture");
       return true;
     });
-    assert.equal(calls, 1);
   });
 
-  test("breaking iteration cancels and unlocks the response body", async () => {
+  test("breaking after an event cancels the open body and releases its lock", async () => {
     let cancellations = 0;
     const body = new ReadableStream<Uint8Array>({
-      start(controller) { controller.enqueue(encoder.encode(`data: ${JSON.stringify(record)}\n\n`)); },
+      start(controller) { controller.enqueue(encoder.encode(frame(opened) + frame(clicked))); },
       cancel() { cancellations++; },
     });
-    const sdk = client(async () => new Response(body, { headers: { "content-type": "text/event-stream" } }));
-    for await (const item of sdk.events.stream()) {
-      assert.deepEqual(item, record);
+    const client = new PostwaveClient({
+      authMode: "none",
+      fetch: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    });
+    let received = 0;
+    for await (const record of client.events.stream()) {
+      assert.deepEqual(record, opened);
+      received++;
       break;
     }
+    assert.equal(received, 1);
     assert.equal(cancellations, 1);
     assert.equal(body.locked, false);
   });
 
+  test("does not inherit automatic request retries for a stream HTTP error", async () => {
+    let calls = 0;
+    const client = new PostwaveClient({
+      authMode: "none",
+      retries: 4,
+      fetch: async () => {
+        calls++;
+        return response([], { status: 404 });
+      },
+    });
+    await assert.rejects(collect(client.events.stream()), NotFoundError);
+    assert.equal(calls, 1);
+  });
+
   test("delivers multiple events from one transport chunk in order", async () => {
-    const second = { ...record, event_type: "clicked" };
-    const sdk = client(async () => textResponse(`data: ${JSON.stringify(record)}\n\ndata: ${JSON.stringify(second)}\n\n`));
-    assert.deepEqual(await collect(sdk.events.stream()), [record, second]);
+    const client = clientFor([frame(opened) + frame(clicked)]);
+    assert.deepEqual(await collect(client.events.stream()), [opened, clicked]);
   });
 });

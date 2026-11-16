@@ -24,7 +24,7 @@ python3 scripts/audit-bundle.py
 ```
 
 These need no installed npm dependencies and make no network requests. The
-starting version has 15 lifecycle checks and seven streaming compatibility
+starting version has 15 lifecycle checks and ten streaming compatibility
 checks. They exercise TypeScript source with Node's native type transformation
 and a local resolver. They do not lint, type-check, build, check package exports
 or run the full fake-timer suite. A pass is not a full `verify` pass.

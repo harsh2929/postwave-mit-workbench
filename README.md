@@ -70,26 +70,41 @@ which is unchanged.
 The semantics are documented under "Timeouts, budgets and cancellation" in
 [SDK-REFERENCE.md](SDK-REFERENCE.md).
 
-### Event-stream baseline and offline diagnostics
+### Event-stream checks without dependencies
 
 ```sh
 npm run --offline test:events:offline
-npm run --offline diagnose:events:offline
+npm run --offline test:offline
 ```
 
-The seven compatibility tests pass on this baseline. The diagnostic reports
-five open streaming defects using only mock transports: split CRLF framing,
-discarding an oversized frame, pre-aborted requests, cancellation during a
-stalled read and HTTP-error reader release. No server or account is needed.
+`test:events:offline` runs ten compatibility cases against `events.stream()`:
+transport/auth headers and filters, LF data lines, complete CRLF frames,
+the existing complete-JSON-at-EOF behavior, malformed and complete oversized
+frames, fragmented UTF-8, HTTP error mapping, consumer early exit, ordered event
+batches and single-connection behavior despite configured request retries.
+`test:offline` runs both focused suites (25 tests in this release).
 
-`npm run --offline check:events:offline` runs the same diagnostic in strict
-mode and **currently exits 1**. A failure is expected on this starting version;
-it is not part of `verify`. Fixing those defects should make it exit 0. The
-diagnostic is a reproduction aid, not complete coverage of stream correctness.
+These are baseline checks. They do not prove complete SSE conformance,
+fragmented-frame recovery or cancellation with a non-cooperative transport.
+The full event suite remains `tests/events-stream.test.ts`, run by `verify`.
+If behavior changes, add regression cases for it in the appropriate suites.
+Neither offline command replaces linting, type checking, build verification
+or the other checks in `npm run verify`.
 
-`npm run --offline test:offline` runs both passing offline suites, currently
-22 cases in total. Their scope and limitations, and the authoritative full
-suite, are described in [VERIFYING.md](VERIFYING.md).
+### Known streaming defects
+
+```sh
+npm run --offline diagnose:events:offline
+npm run --offline check:events:offline
+```
+
+The diagnostic reports five existing defects with mock transports: split CRLF
+framing, discarding an oversized frame, pre-aborted requests, cancellation
+during a stalled read and HTTP-error reader release. The strict check
+**currently exits 1**, expected on this starting version. It is not part of
+`verify`. Fixing those defects should make it exit 0. Neither the diagnostic
+nor the passing compatibility cases exhaustively cover stream correctness.
+See [VERIFYING.md](VERIFYING.md) for the different verification levels.
 
 See [SDK-REFERENCE.md](SDK-REFERENCE.md) for the original client API, and [FIXTURES.md](FIXTURES.md) for the test-data and pinned-contract boundary. Library examples that target a live service are reference code; they are not run by verification and require credentials supplied by the operator.
 

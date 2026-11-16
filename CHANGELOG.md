@@ -6,24 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.1-workbench] - 2026-11-16
+
+### Added
+
+- Mock-only streaming diagnostics for five existing parser, cancellation and
+  reader-cleanup defects. `check:events:offline` intentionally exits 1 until
+  those defects are fixed; it is separate from the passing baseline suites.
+- Two additional offline stream compatibility checks covering ordered event
+  batches and single-connection behavior despite configured request retries.
+- VERIFYING.md distinguishes offline checks, full verification and known-defect
+  diagnostics. FIXTURES.md inventories retained synthetic streaming data.
+
+The concurrent 0.2.0 baseline and its eight compatibility checks are retained.
+No stream implementation changes are included in this release.
+
 ## [0.2.0-workbench] - 2026-11-16
 
 ### Added
 
-- Dependency-free event-stream compatibility tests and mock-only diagnostics
-  for open parser and cancellation defects. `test:offline` runs the lifecycle
-  and streaming compatibility suites. `check:events:offline` intentionally
-  fails on this baseline until the five reported streaming defects are fixed.
-- Explicit verification levels in VERIFYING.md and a fixture inventory in
-  FIXTURES.md. No installed dependencies, build output or private configuration
-  are part of the source archive.
-
-The request and polling changes below are integrated from the final reviewed
-source snapshot. They do not change `events.stream()`; its open defects are
-reported separately by the diagnostic.
-
-### Added
-
+- Added `test:events:offline`, an eight-case stream compatibility baseline,
+  and `test:offline` to run both focused suites without dependency installation.
+- Expanded the synthetic-fixture inventory and verification limitations.
 - Added the separate `campaignTemplates` visual-design resource with catalog
   search, CRUD, clone, adapt, generate, and create-campaign-from-template APIs.
 - Added explicit `campaignTemplates.favorite()` and `.unfavorite()` helpers for
