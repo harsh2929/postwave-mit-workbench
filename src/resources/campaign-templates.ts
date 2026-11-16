@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { Resource } from "./_base.js";
 import type { Campaign } from "./campaigns.js";
+import { MAX_TIMER_DELAY_MS } from "../lib/lifecycle.js";
+import { pollUntilTerminal } from "../lib/polling.js";
 
 /** Visual campaign templates are concrete, editable HTML/MJML designs. */
 export type CampaignTemplateGoal =
@@ -595,8 +597,32 @@ export interface CampaignTemplateDesignMutationOptions {
 }
 
 export interface WaitForCampaignTemplateDesignOptions {
+  /**
+   * Cancel the wait at any point, including mid-poll and during the delay.
+   * Rejects with `RequestAbortedError` (the abort reason is its `payload`);
+   * an already-aborted signal sends no request.
+   */
   signal?: AbortSignal;
+  /**
+   * Wait deadline in ms. Default 120000, minimum 1000. It bounds the whole
+   * wait: in-flight polls, their body reads and the delays between polls.
+   * Expiry rejects with `TimeoutError` (`scope: "wait"`). Non-finite values
+   * fall back to the default.
+   *
+   * The SDK imposes no maximum of its own. Unlike the 30-minute cap on
+   * `sequences.waitForJob()`/`voiceProfile.waitForIngestJob()`, there is no
+   * application-level cap here. The runtime timer limit still applies: values
+   * above 2^31-1 ms (about 24.8 days) are clamped to it.
+   */
   timeoutMs?: number;
+  /**
+   * Minimum delay between polls in ms. Default 1000, minimum 250. The actual
+   * delay is `max(pollIntervalMs, retry_after_seconds * 1000)`, so a longer
+   * server hint on the draft (given in seconds) is honoured instead.
+   * Non-finite values fall back to the default. The delay is clamped to the
+   * runtime timer limit (2^31-1 ms), and the wait deadline cuts it short
+   * anyway.
+   */
   pollIntervalMs?: number;
 }
 
@@ -1090,29 +1116,35 @@ export class CampaignTemplatesResource extends Resource {
     );
   }
 
-  async waitForDesign(
+  /**
+   * Poll `getDesign(id)` until the draft leaves `queued`/`generating`, and
+   * resolve with it. Any other status, including `failed`, is returned, not
+   * thrown. Between polls it waits `max(pollIntervalMs, retry_after_seconds * 1000)`
+   * milliseconds (`retry_after_seconds` is the server hint, in seconds).
+   *
+   * Shares the lifecycle of `sequences.waitForJob()`: the deadline and
+   * `signal` bound in-flight polls, body reads and delays, are checked against
+   * a monotonic clock, and release their timers and listeners on every exit.
+   * Errors from a poll itself (e.g. `NotFoundError`) propagate unchanged.
+   */
+  waitForDesign(
     id: string,
     options: WaitForCampaignTemplateDesignOptions = {},
   ): Promise<CampaignTemplateDesignDraft> {
-    const timeoutMs = Math.max(1_000, options.timeoutMs ?? 120_000);
-    const pollIntervalMs = Math.max(250, options.pollIntervalMs ?? 1_000);
-    const startedAt = Date.now();
-    for (;;) {
-      const draft = await this.getDesign(id, options.signal);
-      if (draft.status !== "queued" && draft.status !== "generating") {
-        return draft;
-      }
-      if (Date.now() - startedAt >= timeoutMs) {
-        throw new Error(
-          `Campaign template design ${id} did not finish within ${timeoutMs}ms`,
-        );
-      }
-      const delay = Math.max(
-        pollIntervalMs,
-        (draft.retry_after_seconds ?? 0) * 1_000,
-      );
-      await wait(delay, options.signal);
-    }
+    const timeoutMs = normalizeDesignWaitTimeout(options.timeoutMs);
+    const pollIntervalMs = normalizeDesignPollInterval(options.pollIntervalMs);
+    return pollUntilTerminal({
+      label: `campaignTemplates.waitForDesign(${id})`,
+      timeoutMessage: `Campaign template design ${id} did not finish within ${timeoutMs}ms`,
+      intervalMs: pollIntervalMs,
+      timeoutMs,
+      signal: options.signal,
+      poll: (signal) => this.getDesign(id, signal),
+      isTerminal: (draft) =>
+        draft.status !== "queued" && draft.status !== "generating",
+      nextDelayMs: (draft) =>
+        designPollDelay(pollIntervalMs, draft.retry_after_seconds),
+    });
   }
 
   createCampaign(
@@ -1124,22 +1156,49 @@ export class CampaignTemplatesResource extends Resource {
   }
 }
 
-function wait(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new Error("Request aborted"));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason ?? new Error("Request aborted"));
-      },
-      { once: true },
-    );
-  });
+/**
+ * waitForDesign option normalisation. Valid values behave as before: the same
+ * defaults and floors, no SDK-imposed maximum, and numeric strings still
+ * coerce. What changes:
+ * - NaN and Infinity take the default. NaN/Infinity `timeoutMs` meant the
+ *   wait could never time out, and a NaN interval re-polled almost at once.
+ * - Everything is clamped to the runtime timer limit (2^31-1 ms), the only
+ *   upper bound. The deadline is now a timer, and a longer delay would make
+ *   setTimeout fire after ~1ms. A `timeoutMs` above the limit was
+ *   previously honoured in full (the old deadline was wall-clock arithmetic,
+ *   not a timer), so it now ends after ~24.8 days instead. An oversized
+ *   interval previously overflowed the delay timer and re-polled almost
+ *   immediately.
+ */
+function normalizeDesignWaitTimeout(value: number | undefined): number {
+  return normalizeDesignDuration(value, 120_000, 1_000);
+}
+
+function normalizeDesignPollInterval(value: number | undefined): number {
+  return normalizeDesignDuration(value, 1_000, 250);
+}
+
+function normalizeDesignDuration(
+  value: number | undefined,
+  fallback: number,
+  floor: number,
+): number {
+  if (value === undefined || value === null) return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(floor, n), MAX_TIMER_DELAY_MS);
+}
+
+/**
+ * max(intervalMs, retry_after_seconds * 1000), as before (the hint is in
+ * seconds, the interval in milliseconds). A hint that is not a positive finite
+ * number (negative, non-numeric) is ignored rather than producing NaN, which
+ * made the old loop re-poll almost immediately. Numeric strings still coerce.
+ */
+function designPollDelay(intervalMs: number, retryAfterSeconds: unknown): number {
+  const hint = Number(retryAfterSeconds ?? 0);
+  const hintMs = Number.isFinite(hint) && hint > 0 ? hint * 1_000 : 0;
+  return Math.min(Math.max(intervalMs, hintMs), MAX_TIMER_DELAY_MS);
 }
 
 function campaignTemplateIfMatch(value: string): string {

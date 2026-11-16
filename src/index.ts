@@ -38,7 +38,11 @@ export {
   WrongRegionError,
   ParseError,
 } from "./errors.js";
-export type { PostwaveResponseMetadata, SendingCapOutcome } from "./errors.js";
+export type {
+  PostwaveResponseMetadata,
+  SendingCapOutcome,
+  TimeoutScope,
+} from "./errors.js";
 
 export {
   verifySignature,

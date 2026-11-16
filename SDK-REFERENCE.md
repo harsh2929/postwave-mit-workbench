@@ -7,6 +7,10 @@ MIT licensed as Layer 2 of the Moosewave open-core architecture.
 - Dual ESM + CJS build.
 - Works in Node 18+, modern browsers, and edge runtimes.
 - Exponential-backoff retries on 429 / 5xx (with `Retry-After` honoring).
+- Per-attempt timeouts covering the response body, an optional overall
+  request budget, and cancellation at any point via `AbortSignal`, for every
+  request/response call. The long-lived `events.stream()` is the documented
+  exception.
 - Constant-time HMAC-SHA256 webhook signature verification.
 - Hand-written — no codegen toolchain — kept in lockstep with `packages/openapi`.
 
@@ -50,10 +54,10 @@ console.log(seq.emails[0].subject);
 | `pw.developerMarketplace` | `monitoring`, `submitListingReview`, `listPartnerProfiles`, `upsertPartnerProfile`, `submitPartnerProfileReview`, `reviewQueue`, `reviewAppDecision`, `reviewListingDecision`, `reviewPartnerProfileDecision`, `authorize`, `token`, `revoke`                                                                   |
 | `pw.migrations`           | `start`, `callback`, `discover`, `dryRun`, `commit`, `get`, `verification`, `rollback`, `rollbackStatus`, `listSources`                                                                                                                                                                                         |
 | `pw.subscribers`          | `list`, `get`, `create`, `update`, `delete`, `search`, `suppress`                                                                                                                                                                                                                                               |
-| `pw.sequences`            | `list`, `get`, `generate`, `regenerate`                                                                                                                                                                                                                                                                         |
+| `pw.sequences`            | `list`, `get`, `generate`, `regenerate`, `getJob`, `waitForJob`                                                                                                                                                                                                                                                                |
 | `pw.templates`            | Voice/sequence templates: `list`, `get`, `create`, `update`, `delete`                                                                                                                                                                                                                                           |
 | `pw.campaignTemplates`    | Visual newsletter designs: `list`, `search`, `get`, personal `favorite`/`unfavorite`, recents, collections, saved searches, `listRevisions`, `getRevision`, `create`, concurrency-safe `update`, `archive`, `restore`, `clone`, durable `adapt`/`generate`, actor-scoped `listDesigns`, and `createCampaign`. Deprecated `delete` safely archives.             |
-| `pw.voiceProfile`         | `get`, `build`, `listSources`, `addSource`, `ingestSource`, `removeSource`                                                                                                                                                                                                                                      |
+| `pw.voiceProfile`         | `get`, `build`, `listSources`, `addSource`, `ingestSource`, `getIngestJob`, `waitForIngestJob`, `removeSource`                                                                                                                                                                                                                                      |
 | `pw.forms`                | `list`, `get`, `create`, `update`, `delete`, `listSubmissions`, `exportSubmissionsCSV`                                                                                                                                                                                                                          |
 | `pw.inboxReality`         | `getCampaignReport`, `predict`, `diagnose`, `render`                                                                                                                                                                                                                                                            |
 | `pw.reputation`           | `get`                                                                                                                                                                                                                                                                                                           |
@@ -415,6 +419,223 @@ try {
 
 Every error carries `status`, `code`, `message`, and (when the gateway sets it)
 a `requestId` you can include in support tickets.
+
+## Timeouts, budgets and cancellation
+
+Three independent bounds apply to every call made through
+`PostwaveClient.request()`. That covers every resource method **except
+`events.stream()`**, which is a long-lived stream and deliberately does not
+use `request()` (see [Which operations get these guarantees](#which-operations-get-these-guarantees)).
+
+| Bound | Set with | Default | Covers | On expiry |
+| --- | --- | --- | --- | --- |
+| Per-attempt timeout | client `timeoutMs` | 30 s (max 120 s) | One wire attempt: connect, headers **and body read**. Each retry gets a fresh timer. | `TimeoutError`, `scope: "attempt"`. Retried under the normal retry policy. |
+| Overall budget | client `totalTimeoutMs`; per-call `totalTimeoutMs` on `pw.request()` only | Off | The whole call: every attempt, body read and backoff sleep. | `TimeoutError`, `scope: "total"`. Never retried. |
+| Caller cancellation | per-call `signal`, where the method accepts one (listed below) | — | The whole call, at any point. | `RequestAbortedError`. Never retried. |
+
+```ts
+import { PostwaveClient, RequestAbortedError, TimeoutError } from "@postwave/sdk";
+
+// Every call gets at most 20 s end to end, retries and backoff included.
+const pw = new PostwaveClient({ apiKey, timeoutMs: 10_000, totalTimeoutMs: 20_000 });
+
+const ac = new AbortController();
+try {
+  // Per-call override: tighter for this call. `null` disables the budget.
+  await pw.request("GET", "/api/v1/subscribers", {
+    signal: ac.signal,
+    totalTimeoutMs: 5_000,
+  });
+} catch (e) {
+  if (e instanceof RequestAbortedError) {
+    /* the caller cancelled; e.payload is signal.reason */
+  } else if (e instanceof TimeoutError) {
+    /* an SDK deadline expired; e.scope is "attempt" | "total" */
+  } else throw e;
+}
+```
+
+- **Timeout and cancellation stay distinct.** `TimeoutError` means an
+  SDK-owned deadline expired. `RequestAbortedError` means *your* signal fired,
+  even if it came from `AbortSignal.timeout()`. Both keep their stable codes
+  (`request_timeout` / `request_aborted`) and both extend `NetworkError`.
+- **Budget and backoff.** If the next backoff (including a `Retry-After`)
+  would not fit in the remaining budget, the last attempt's real error (for
+  example `RateLimitError`) is thrown at once instead of waiting out the
+  budget. An attempt never runs past the budget.
+- **Write safety is unchanged.** Retries still require a safe verb or an
+  `Idempotency-Key`, and an auto-minted key is reused for every attempt. A
+  body-read timeout on a keyless `POST`/`PATCH`/`DELETE` is not retried, and
+  `maxAttempts` is honoured inside the budget.
+- **Deadlines are checked against a monotonic clock, not only by timers.**
+  A retry, a 304 cache-bust refetch or a poll never *starts* once the
+  caller has cancelled or a deadline has passed. This holds even when a
+  blocked event loop delays the deadline's own timer past a shorter backoff
+  or interval timer.
+- **Wall-clock corrections do not move budgets.** `timeoutMs`,
+  `totalTimeoutMs` and waiter deadlines are relative durations, measured with
+  `performance.now()`, never `Date.now()`. An NTP step, a manual clock change
+  or a VM resume re-sync neither expires a budget early nor stretches it.
+  Time the whole machine spends suspended may not count, just as it does not
+  for runtime timers. Only an HTTP-date `Retry-After`, which is an absolute
+  time, is compared with the wall clock. Where `performance.now` is
+  unavailable, the SDK falls back to a wall clock clamped never to run
+  backwards; there, a forward correction can still shorten a budget.
+- **Settle rule.** Once the caller has cancelled (including from inside
+  `onResponseHeaders`) or the overall budget has passed, the call rejects
+  with `RequestAbortedError` / `TimeoutError` and never resolves. The
+  request's success, a 204 with no body, or its HTTP error is not reported
+  either. The per-attempt timeout is a stall detector: it interrupts a
+  stalled attempt, but a response that has already been fully received is
+  not discarded just because it overran the attempt timer.
+- **Nothing is left armed.** Every path, whether success, error, timeout or
+  cancellation, clears the SDK's timers, removes its listener from your
+  signal, and cancels any response body it did not finish reading. A
+  signal that is already aborted rejects without calling `fetch`.
+- `totalTimeoutMs` must be a positive, finite number of milliseconds; other
+  values throw rather than silently running unbounded. Values above
+  2,147,483,647 ms (the timer limit) are clamped.
+
+### Which operations get these guarantees
+
+| Operation | Per-attempt `timeoutMs` + retries | Client `totalTimeoutMs` | Per-call `totalTimeoutMs` | Caller `signal` |
+| --- | --- | --- | --- | --- |
+| `pw.request(method, path, opts)` | Yes | Yes | Yes | Yes |
+| Resource methods that accept a `signal`: `pushSuppressions.list/add/remove/bulkImport/bulkRemove`, `conversionIngest.ingest/ingestBatch`, `conversionIngestSecrets.list/issue/revoke`, `campaignTemplates.createDesign/getDesign/refineDesign/retryDesign/saveDesign/createCampaignFromDesign/archiveDesign/waitForDesign`, `sequences.getJob/waitForJob`, `voiceProfile.getIngestJob/waitForIngestJob` | Yes | Yes | No | Yes |
+| Every other resource method, including `events.subscribe()` | Yes | Yes | No | No |
+| `GeneratedOperations` with a `PostwaveClient` transport | Yes | Yes | No | No |
+| `events.stream()` | **No** | **No** | **No** | Passed straight to `fetch`; see below |
+
+Resource methods do not forward a per-call budget. To give one call its own
+budget or cancellation when its method has no `signal` option, either use
+`pw.request()` for that call or construct a client with the
+`totalTimeoutMs` you need. The three polling helpers,
+`sequences.waitForJob()`, `voiceProfile.waitForIngestJob()` and
+`campaignTemplates.waitForDesign()`, additionally have the wait-deadline
+guarantees below. Methods that never touch the network (webhook signature helpers,
+locally held operations) have no lifecycle to bound.
+
+### Streaming exception: `events.stream()`
+
+`events.stream()` opens a Server-Sent Events connection that is meant to stay
+open indefinitely, so it calls the transport directly (`fetchRaw`) instead of
+`request()`. Applying a per-attempt timeout or overall budget would cut off a
+healthy stream. Its behaviour is therefore different, and unchanged by the
+lifecycle work:
+
+- **No SDK deadline.** Neither `timeoutMs` nor `totalTimeoutMs` applies, to
+  connecting or to reading. A stream that stalls stays open until you cancel
+  it.
+- **No retries or reconnection.** A failed connect, an HTTP error or a
+  dropped stream ends the iteration; reconnecting is up to you.
+- **Cancellation depends on the transport.** Your `signal` is passed straight
+  to `fetch`, with no SDK race around it. The platform `fetch` ends the
+  connection on abort. A custom transport that ignores its signal keeps the
+  stream open. A signal that is already aborted is still handed to the
+  transport.
+- **Errors are not normalised like `request()`'s.** An abort surfaces as the
+  transport's own error (typically a `DOMException` named `AbortError`), not
+  `RequestAbortedError`. Transport failures surface as thrown, not as
+  `NetworkError`. A non-2xx response *is* mapped to the usual typed error
+  (for example `ServerError`) after at most 64 KiB of its body is read.
+- **Stopping consumption releases the connection.** Leaving the
+  `for await` loop (`break`, `return` or a thrown error) cancels the
+  response body and releases its reader.
+
+To bound how long you wait for the connection or the next event, own the
+deadline yourself. Use a controller you abort from your own timer and reset
+on each event. Avoid `AbortSignal.timeout()` for this: it would also end a
+healthy stream once it fires.
+
+```ts
+const ac = new AbortController();
+let idle = setTimeout(() => ac.abort(), 30_000); // no event for 30 s -> stop
+try {
+  for await (const event of pw.events.stream({ signal: ac.signal })) {
+    clearTimeout(idle);
+    idle = setTimeout(() => ac.abort(), 30_000);
+    handle(event);
+  }
+} catch (e) {
+  if (!ac.signal.aborted) throw e; // a real failure, not our idle cutoff
+} finally {
+  clearTimeout(idle);
+}
+```
+
+### Polling helpers
+
+`sequences.waitForJob()`, `voiceProfile.waitForIngestJob()` and
+`campaignTemplates.waitForDesign()` share one implementation and the same
+guarantees. Their options and defaults are their own and are unchanged:
+
+| Helper | Delay option | Delay default / min | `timeoutMs` default / bounds | Terminal (returned, not thrown) | Timeout message |
+| --- | --- | --- | --- | --- | --- |
+| `sequences.waitForJob(id, opts)` | `intervalMs` | 2 s / max 30 s | 5 min / max 30 min | `succeeded`, `failed` | `sequences.waitForJob(<id>): timed out after <ms>ms` |
+| `voiceProfile.waitForIngestJob(src, id, opts)` | `intervalMs` | 2 s / max 30 s | 5 min / max 30 min | `succeeded`, `failed` | `voice.waitForIngestJob(<id>): timed out after <ms>ms` |
+| `campaignTemplates.waitForDesign(id, opts)` | `pollIntervalMs` | 1 s / min 250 ms | 120 s / min 1 s; no SDK maximum (runtime timer limit applies, see below) | any status except `queued`/`generating` | `Campaign template design <id> did not finish within <ms>ms` |
+
+```ts
+const job = await pw.sequences.waitForJob(ack.job_id, {
+  timeoutMs: 120_000, // wait deadline
+  intervalMs: 2_000,  // delay between polls
+  signal: ac.signal,
+});
+
+const design = await pw.campaignTemplates.waitForDesign(draft.id, {
+  timeoutMs: 60_000,
+  pollIntervalMs: 1_000, // retry_after_seconds * 1000 wins if longer
+  signal: ac.signal,
+});
+```
+
+- The wait deadline and `signal` bound an **in-flight poll** (request and
+  body read) as well as the delay between polls.
+  No poll starts, and no result (not even a terminal one) is returned, once
+  the deadline has passed on the monotonic clock or the caller has cancelled.
+  This also applies to the client's own retries inside a poll.
+- Deadline expiry rejects with `TimeoutError` (`scope: "wait"`, `timeoutMs`
+  set) and the helper's message from the table. Caller cancellation rejects
+  with `RequestAbortedError`, with the abort reason as `payload`. A
+  signal that is already aborted sends no request.
+- Every exit path releases the deadline timer, the delay timer and every
+  listener added to your signal.
+- Errors from a poll itself propagate unchanged. That includes
+  `NotFoundError`, and a per-attempt `TimeoutError` once client retries are
+  exhausted.
+- Each poll is an ordinary `request()`, so the client's `timeoutMs`,
+  `retries` and any `totalTimeoutMs` apply to each poll individually.
+- `waitForDesign` waits `max(pollIntervalMs, retry_after_seconds * 1000)`
+  milliseconds between polls, as before. `pollIntervalMs` is in
+  milliseconds; the server's `retry_after_seconds` hint is in seconds. A hint
+  that runs past the deadline is cut off by it. A hint that is not a
+  positive number is ignored (numeric strings still count).
+- **Upper bounds.** `sequences.waitForJob()` and
+  `voiceProfile.waitForIngestJob()` cap `timeoutMs` at 30 minutes and
+  `intervalMs` at 30 seconds. `campaignTemplates.waitForDesign()` imposes **no
+  application-level maximum** on `timeoutMs` or `pollIntervalMs`. The
+  runtime timer limit still applies to every helper: any deadline or delay
+  above 2,147,483,647 ms (2^31-1, about 24.8 days) is clamped to it, because
+  a longer `setTimeout` fires after about 1 ms instead.
+
+#### Intentional changes to `campaignTemplates.waitForDesign()`
+
+Moving this helper onto the shared lifecycle changes these, deliberately:
+
+| Situation | Before | Now |
+| --- | --- | --- |
+| Deadline expires | plain `Error` | `TimeoutError` (`scope: "wait"`). The message is identical and `instanceof Error` still holds. It is now also a `NetworkError`/`PostwaveError`. |
+| Cancelled during the delay between polls | the raw `signal.reason` (e.g. a `DOMException` `AbortError`) was rethrown | `RequestAbortedError` with `payload === signal.reason`, matching cancellation during a poll, which was already `RequestAbortedError` |
+| A poll stalls | waited indefinitely; the deadline was only checked after a poll returned | ends at the deadline; the stalled request and its body are released |
+| Delay or retry hint runs past the deadline | slept in full, then polled once more, so the wait could overrun `timeoutMs` and still return a late result | ends at the deadline with no further poll |
+| A wait completes | each delay left an abort listener on your signal (two after a three-poll wait) | all listeners and timers released |
+| `timeoutMs` is `NaN`/`Infinity` | never timed out | 120 s default |
+| `pollIntervalMs` is `NaN` | re-polled almost immediately | 1 s default |
+| `timeoutMs` above 2^31-1 ms (about 24.8 days) | honoured in full (the old deadline was wall-clock arithmetic, not a timer) | clamped to the runtime timer limit, 2^31-1 ms; there is still no application-level cap |
+| `pollIntervalMs` or `retry_after_seconds * 1000` above 2^31-1 ms | overflowed the delay timer, which then fired after about 1 ms, so it re-polled almost immediately | clamped to 2^31-1 ms, and cut short by the wait deadline |
+
+Options within the runtime timer limit, defaults, floors, terminal statuses
+and retry hints behave as before.
 
 ## Signed server-side conversions
 

@@ -61,7 +61,8 @@
     "generate:operations:check": "node scripts/generate-operations.mjs --self-test && node scripts/generate-operations.mjs --check",
     "verify": "npm run lint && npm run typecheck && npm run generate:operations:check && npm run test && npm run build && npm run test:package && npm run audit:bundle",
     "test:package": "node --test scripts/package-exports.test.mjs",
-    "audit:bundle": "python3 scripts/audit-bundle.py"
+    "audit:bundle": "python3 scripts/audit-bundle.py",
+    "test:lifecycle:offline": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./scripts/offline/register-ts.mjs --import ./tests/offline.setup.ts --test tests/offline/lifecycle.offline.ts"
   },
   "dependencies": {},
   "devDependencies": {
