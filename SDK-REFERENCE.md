@@ -53,7 +53,7 @@ console.log(seq.emails[0].subject);
 | `pw.pushSuppressions`     | `list`, `add`, `remove`, `bulkImport`, `bulkRemove` for exact-admin tenant-customer APNs/FCM/Web suppression authority. This is a private registry/control-plane surface, not operator Expo-device management or evidence of live delivery.                                                                            |
 | `pw.developerMarketplace` | `monitoring`, `submitListingReview`, `listPartnerProfiles`, `upsertPartnerProfile`, `submitPartnerProfileReview`, `reviewQueue`, `reviewAppDecision`, `reviewListingDecision`, `reviewPartnerProfileDecision`, `authorize`, `token`, `revoke`                                                                   |
 | `pw.migrations`           | `start`, `callback`, `discover`, `dryRun`, `commit`, `get`, `verification`, `rollback`, `rollbackStatus`, `listSources`                                                                                                                                                                                         |
-| `pw.subscribers`          | `list`, `get`, `create`, `update`, `delete`, `search`, `suppress`                                                                                                                                                                                                                                               |
+| `pw.subscribers`          | `list`, `listPages`, `listAll`, `get`, `create`, `update`, `delete`, `search`, `suppress`                                                                                                                                                                                                                                               |
 | `pw.sequences`            | `list`, `get`, `generate`, `regenerate`, `getJob`, `waitForJob`                                                                                                                                                                                                                                                                |
 | `pw.templates`            | Voice/sequence templates: `list`, `get`, `create`, `update`, `delete`                                                                                                                                                                                                                                           |
 | `pw.campaignTemplates`    | Visual newsletter designs: `list`, `search`, `get`, personal `favorite`/`unfavorite`, recents, collections, saved searches, `listRevisions`, `getRevision`, `create`, concurrency-safe `update`, `archive`, `restore`, `clone`, durable `adapt`/`generate`, actor-scoped `listDesigns`, and `createCampaign`. Deprecated `delete` safely archives.             |
@@ -64,7 +64,9 @@ console.log(seq.emails[0].subject);
 | `pw.authChecks`           | `list`                                                                                                                                                                                                                                                                                                          |
 | `pw.sending`              | `provision`, `getState`, `getWarmup`                                                                                                                                                                                                                                                                            |
 | `pw.automations`          | `trigger`, `listExecutions`, `pause`, `resume`                                                                                                                                                                                                                                                                  |
-| `pw.webhooks`             | Canonical outbound destinations: `list`, `create`, `update`, `delete`, `test`, `deliveries`, `deliveriesList`, `replay`, `rotateSecret`, `verifySignature`                                                                                                                                                       |
+| `pw.webhooks`             | Canonical outbound destinations: `list`, `listPages`, `listAll`, `create`, `update`, `delete`, `test`, `deliveries`, `deliveriesList`, `deliveriesPages`, `deliveriesAll`, `replay`, `rotateSecret`, `verifySignature`                                                                                                                                                       |
+| `pw.lists`                | `list`, `create`, `update`, `delete`, `members`, `membersPages`, `membersAll`, `forSubscriber` |
+| `pw.audit`                | `query`, `queryPages`, `queryAll` |
 | `pw.inboundWebhooks`      | Signed inbound endpoints: `list`, `create`, `get`, `update`, `rotate`, `delete`, `events`, `replay`, `triggers`, `createTrigger`, `updateTrigger`, `deleteTrigger`, `previewTransform`                                                                                                                            |
 | `pw.conversionIngest`     | Key-bound HMAC v2 server-side conversions: `ingest` and atomic `ingestBatch` (maximum 500). The resource signs the exact raw JSON bytes and omits dashboard bearer/tenant headers.                                                                                                                               |
 | `pw.conversionIngestSecrets` | Exact-admin, metadata-only `list`, reveal-once `issue`, and exact `revoke` for the HMAC credentials used by conversion ingest. Pages are capped at 100 and are never auto-walked. |
@@ -400,6 +402,334 @@ const token = await pw.developerMarketplace.token({
 await pw.developerMarketplace.revoke({ token: token.access_token });
 ```
 
+## Pagination
+
+Five collections have lazy, typed page and item iterators built on one shared
+engine. The single-page methods are unchanged and remain the way to fetch
+exactly one page.
+
+| Collection | Single page (unchanged) | Page iterator | Item iterator | Continuation |
+| --- | --- | --- | --- | --- |
+| Subscribers | `subscribers.list(params)` | `subscribers.listPages(params, options)` → `SubscriberPage` | `subscribers.listAll(params, options)` → `Subscriber` | offset, then keyset `next_cursor` once offered |
+| List members | `lists.members(listId, params)` | `lists.membersPages(listId, params, options)` → `ListMembersPage` | `lists.membersAll(listId, params, options)` → `ListMember` | offset (`page`/`per_page`/`total`) |
+| Outbound webhooks | `webhooks.list(params)` | `webhooks.listPages(params, options)` → `WebhookListPage` | `webhooks.listAll(params, options)` → `WebhookSubscription` | `next_cursor` |
+| Webhook deliveries | `webhooks.deliveriesList(id, params)` | `webhooks.deliveriesPages(id, params, options)` → `WebhookDeliveryPage` | `webhooks.deliveriesAll(id, params, options)` → `WebhookDelivery` | `next_cursor` |
+| Audit entries | `audit.query(params)` | `audit.queryPages(params, options)` → `AuditQueryResponse` | `audit.queryAll(params, options)` → `AuditEntry` | `next_cursor` |
+
+Page iterators yield each server page object unchanged, typed by the existing
+response contract. Item iterators yield the entries of those pages in order.
+Both return a `PaginatedIterator<T>`: an async iterator with a `progress` view.
+
+```ts
+import { PaginationError } from "@postwave/sdk";
+
+const ac = new AbortController();
+const rows = pw.subscribers.listAll(
+  { status: "enabled", per_page: 200 },
+  { signal: ac.signal, maxPages: 5_000, timeBudgetMs: 10 * 60_000 },
+);
+try {
+  for await (const subscriber of rows) {
+    await writeRow(subscriber); // time spent here counts against timeBudgetMs
+  }
+  // Normal end. Only `complete: true` means the whole collection was exported.
+  if (!rows.progress.complete) {
+    // max_items | consumer_stopped | metadata_conflict (see progress.conflicts)
+    console.warn("export not confirmed complete:", rows.progress.stopReason, rows.progress.conflicts);
+  }
+} catch (e) {
+  if (e instanceof PaginationError) {
+    // max_pages | time_budget | malformed_page | repeated_continuation.
+    // The export is INCOMPLETE; e.items rows were delivered first.
+    console.error(e.reason, e.pages, e.items);
+  }
+  throw e;
+}
+```
+
+### Options
+
+| Option | Iterators | Default | Meaning |
+| --- | --- | --- | --- |
+| `signal` | all | none | Cancels at any point: before the first request, during a page request (including retries and backoff), or while your loop body runs. |
+| `maxPages` | all | 1000 | Finite page guard: the most page requests one iteration may make. Must be a positive integer; `Infinity` is rejected. |
+| `maxItems` | item (`*All`) only | none | Deliver at most this many items, then end normally. Rejected by page iterators (a type error, and a runtime error from JavaScript). |
+| `timeBudgetMs` | all | none | Overall budget for the whole iteration. Values above 2^31-1 ms are clamped. |
+
+Invalid options or parameters throw synchronously from the method call, and no
+request is made: a non-integer or out-of-range `maxPages`/`maxItems`, a
+non-positive or non-finite `timeBudgetMs`, `per_page` outside 1-200 (the
+contract maximum for subscribers and list members), `page` below 1, a `limit`
+below 1, an empty `cursor`, and an empty list or webhook id.
+
+### Laziness and memory
+
+- Creating an iterator sends nothing. The first `next()` requests the first
+  page. A later page is requested only when you ask for more than has been
+  delivered. There is no prefetch.
+- At most one page is held at a time, plus a window of the 1,024 most recently
+  used cursors for repeat detection. Nothing accumulates across pages, so
+  items are **not** de-duplicated.
+- Filters are copied when the iterator is created and sent unchanged with
+  every page. Mutating your params object later has no effect. Only the
+  continuation (`page` or `cursor`) changes between requests.
+- `page` (subscribers, list members) or `cursor` (subscribers, webhooks,
+  deliveries, audit) choose where to start, so a stopped export can be resumed
+  from a cursor you persisted from a page. For subscribers, a `cursor` wins
+  over `page`, as on the server.
+- Iterators are single-use, like generators. Concurrent `next()` calls are
+  queued and served in order. `return()` (what `break` calls) waits for a
+  pending `next()`. To interrupt a page request in flight, use `signal`.
+
+### How iteration continues and ends
+
+- **Cursor collections** (webhooks, deliveries, audit) follow `next_cursor`
+  until it is absent, `null` or `""`.
+- **List members** are offset-only. Iteration ends on an empty page, or once
+  `page * per_page >= total`, without an extra request. The server must echo
+  the page requested. Whether that end counts as complete depends on the page
+  metadata; see [Numbered pages and stale totals](#numbered-pages-and-stale-totals).
+- **Subscribers** start by offset. As soon as a page carries `next_cursor`,
+  iteration switches to that keyset cursor and follows only it (the server
+  offers it for the default sort). In cursor mode an absent cursor ends
+  iteration, whatever `total` says.
+- **Empty pages.** An offset page with no items ends iteration. It is
+  complete only when `total` agrees. A genuinely empty collection (page 1, no
+  rows, `total: 0`) is complete. A cursor page with no items but a
+  `next_cursor` is followed. Page iterators yield it, item iterators skip it.
+  It counts toward `maxPages`.
+
+### Stopping behavior
+
+Every iteration ends in exactly one of these ways. `iterator.progress` reports
+`{ pages, items, done, complete, stopReason }` at any time, plus `conflicts`
+once a numbered-page metadata conflict has been seen (see below). `pages`
+counts pages that passed the delivery gate. For item iterators, a page counts
+when its first item is delivered, or when an empty page passes through.
+
+| `stopReason` | How it surfaces | `complete` | When |
+| --- | --- | --- | --- |
+| `end` | normal end | `true` | The server reported the end, every item was delivered, and no numbered-page metadata conflicted. **The only outcome with `complete: true`.** |
+| `metadata_conflict` | normal end | `false` | The server reported the end and everything it returned was delivered, but numbered-page metadata conflicted along the way (`progress.conflicts` names each kind), so rows may have been skipped or missed. |
+| `max_items` | normal end | `false` | `maxItems` reached while more data remained (or a next page was reported). If the cap coincides with the end, the reason is `end` (or `metadata_conflict`). |
+| `consumer_stopped` | normal end | `false` | You called `return()`/`break`. No further request is sent. |
+| `max_pages` | `PaginationError` | `false` | `maxPages` requests were made and the server still reports more. Raised only when you ask for more data; every allowed page is delivered first. A collection that ends exactly at the guard completes normally. |
+| `time_budget` | `PaginationError` | `false` | `timeBudgetMs` expired. |
+| `malformed_page` | `PaginationError` | `false` | A page broke its contract: not an object, the items field not an array of objects, a non-string `next_cursor`, missing or invalid `page`/`per_page`/`total` where the contract requires them, more items than `per_page`, an empty 200/204 body, or a `page` higher than requested. |
+| `repeated_continuation` | `PaginationError` | `false` | The server returned a cursor this iteration already used (including your resume cursor), or an offset page numbered lower than requested (a server ignoring `page`). |
+| `cancelled` | `RequestAbortedError` (payload: your abort reason) | `false` | Your `signal` aborted. |
+| `request_failed` | the page request's own error, unchanged (`ServerError`, `RateLimitError`, `NetworkError`, `TimeoutError` with `scope: "attempt"`, `ParseError`, ...) | `false` | A page request failed after the client's retries (see [Retries and recovery](#retries-and-recovery)). |
+
+**A limit never shortens an export silently.** `max_pages` and `time_budget`
+always reject with `PaginationError`, whose message says the result is
+incomplete and how many items and pages were delivered first. `maxItems` is a
+cap you chose, so it ends normally. Check `progress.complete` (or
+`stopReason`) afterwards, because a cap reached before the end leaves
+`complete: false`. So does a `metadata_conflict`, which ends normally because
+every row the server returned was delivered, but does not claim completeness.
+
+**One delivery rule for pages and items.** Page and item iterators hand out
+data through the same gate. It runs immediately before each page or item is
+yielded, with no asynchronous step in between. A page that was fetched and
+accepted is still **not** yielded if your `signal` aborted, or the time
+budget passed, in the short hand-off between acceptance and delivery. The
+iterator rejects (`RequestAbortedError` or `PaginationError` `time_budget`)
+instead, exactly as an item iterator does for that page's items. That page is
+not counted in `progress.pages`/`items`.
+
+A page that fails validation, or whose continuation repeats, is rejected
+**whole**: none of its items are delivered. After any rejection, further
+`next()` calls return `done: true`.
+
+### Numbered pages and stale totals
+
+Offset ("numbered") pages carry `page`, `per_page` and `total`. The SDK uses
+them to decide when to stop, but it does not trust a `total` that the pages
+contradict. It checks each numbered page against the last one and records
+every conflict as a `PaginationMetadataConflict`:
+
+| Conflict | Seen when | Typical cause |
+| --- | --- | --- |
+| `total_changed` | `total` differs from the previous numbered page's | rows added or removed during the walk |
+| `per_page_changed` | `per_page` differs from the previous numbered page's | server page size changed mid-walk; offsets no longer line up |
+| `empty_before_total` | a page is empty although `total` says rows remain at its offset | stale `total` after deletions |
+| `short_page_before_total` | a non-empty page has fewer than `per_page` rows although `total` says more follow | deletions between counting and reading |
+| `rows_beyond_total` | the pages so far hold more rows than `total` | stale `total` after inserts; rows may exist past the point where iteration stopped |
+
+How a conflict is handled:
+
+- **Continuation rules do not change.** Iteration still ends on an empty page
+  or once `page * per_page >= total`, using the current page's `total`. No
+  extra "confirmation" request is made, so a stale total costs no additional
+  requests and cannot loop. This is bounded by `maxPages` as always.
+- **Completeness is withheld.** If any conflict was seen, reaching the end
+  reports `stopReason: "metadata_conflict"` and `complete: false` instead of
+  `end`. `progress.conflicts` lists each distinct kind once, in the order
+  first seen. Every row the server returned has still been delivered.
+- **A conflict never hides another outcome.** If the iteration then ends for
+  another reason (`max_items`, `consumer_stopped`, `max_pages`, `cancelled`,
+  ...), that reason is reported and `conflicts` is still listed.
+- **Genuinely empty collections stay complete.** Page 1 with no rows and
+  `total: 0` is not a conflict: `stopReason: "end"`, `complete: true`, no
+  `conflicts`. Neither is a resume `page` past the end (an empty page whose
+  offset is already at or beyond `total`). By contrast, an empty page 1 with
+  `total > 0` is `empty_before_total`.
+- **Cursor pages are not checked.** Once a keyset cursor drives iteration
+  (subscribers after the switch, webhooks, deliveries, audit), the cursor
+  alone decides continuation, and `total` is informational. Conflicts seen
+  on subscriber offset pages before the switch still count.
+
+What to do with `metadata_conflict`: the rows you received are real, but the
+set may be missing rows or contain repeats. Re-run the export, reconcile by
+`id`, or, for subscribers, use the default sort so the keyset cursor takes
+over after the first page.
+
+### Concurrent traversals
+
+Any number of iterators can run at the same time on one client, including
+several over the same collection with the same filters. Each iterator is an
+independent traversal.
+
+- **Nothing is shared between traversals.** Each has its own filters
+  snapshot, continuation (page number or cursor), repeated-cursor history,
+  `maxPages`/`maxItems` counts, time budget and `progress`. Two traversals of
+  one collection each send the full sequence of requests, and a cursor that
+  both use is not a "repeat" for either. The client holds no per-traversal
+  state, and every page request is an ordinary independent request with its
+  own retries.
+- **Stopping one stops only that one.** Cancelling its signal, its budget
+  running out, `break`/`return()`, a malformed page, a repeated cursor, the
+  page guard or a failed request ends that traversal alone. The others'
+  requests, cursors, delivered items and `progress` are exactly what they
+  would have been had it never run. Their in-flight requests are not aborted.
+- **A shared signal cancels every traversal that uses it**, whatever each is
+  doing: not started yet (rejects on its first `next()` without a request),
+  waiting for a page (that request is aborted), or paused in your loop body
+  with items buffered (rejects on its next `next()`). Each rejects with
+  `RequestAbortedError` carrying the same abort reason. A traversal that
+  already finished keeps its outcome. Traversals on other signals, or none,
+  are unaffected.
+- **The SDK never aborts your signal.** A traversal on a shared signal that
+  stops, times out or fails leaves the signal untouched, and the other
+  traversals sharing it carry on.
+- **Listeners.** Each traversal adds one `abort` listener to its signal while
+  a page request is in flight, and removes it when that request settles.
+  Twenty-five traversals waiting on one signal hold twenty-five listeners,
+  and none once they settle or are cancelled. Node emits no
+  `MaxListenersExceededWarning` for these (checked in the tests).
+- **No coordination.** Traversals do not share a rate limit or a concurrency
+  cap. Each page request handles `429`/`Retry-After` on its own. If the API
+  rate-limits you, bound how many traversals you run at once.
+
+### Retries and recovery
+
+Each page is one ordinary request, so the client's retry policy applies to
+each page on its own. The iterator never retries by itself.
+
+- **What is retried:** `429`, `5xx` except `501`, transport failures, a
+  response body that fails mid-read, and an expired per-attempt `timeoutMs`,
+  up to the client's `retries`. The waits follow `Retry-After` or exponential
+  backoff, as for any request. A 304 from a platform cache is refetched once
+  with a cache-busting parameter.
+- **What is not retried:** a page that breaks its contract (`malformed_page`),
+  repeated continuation data, invalid JSON on a `2xx` (`ParseError`), `501`,
+  and other `4xx`. Neither is a 304 that persists after the one cache-busting
+  refetch: it surfaces as a `PostwaveError` with `status: 304`. These fail the
+  iteration at once.
+- **The same page, nothing skipped or repeated.** A retry re-sends the
+  identical page request: the same filters and the same `page` or `cursor`.
+  The continuation advances only after a complete, valid page has been
+  accepted. Nothing from a failed attempt is delivered. That includes the
+  part of a body received before the connection dropped, even when that part
+  already held complete rows: they are delivered once, from the retried
+  page. After recovery, items, their order and `progress` are exactly as if
+  no attempt had failed.
+- **Exhausted retries** reject with the **last attempt's own error**,
+  unchanged: `ServerError`, `RateLimitError`, `NetworkError`, or
+  `TimeoutError` (`scope: "attempt"`). It is not wrapped in a
+  `PaginationError`. `progress` then shows exactly what was delivered before
+  the failing page: `stopReason: "request_failed"`, `complete: false`, and
+  `pages`/`items` counting only delivered data. The failing page is never
+  counted, and no request is sent after it.
+- **Limits count pages, not attempts.** `maxPages` counts page requests,
+  each with all of its retries. A guard of 3 allows three pages even if each
+  took three attempts. `maxItems` counts delivered items only.
+- **Budgets and cancellation cover retries.** `timeBudgetMs` includes every
+  attempt and every backoff wait. Once the budget has passed or your `signal`
+  has aborted, no further attempt starts. A backoff in progress is cut short
+  (`time_budget` or `RequestAbortedError`), even a long `Retry-After`. The
+  client's own `totalTimeoutMs` still applies to each page request. When a
+  backoff will not fit in it, that page's last error is thrown at once
+  (`request_failed`), as for any request.
+- **Concurrent traversals retry independently.** One traversal's failures,
+  retries, backoff waits or exhausted retries do not delay, repeat or alter
+  another's requests or results.
+- **Resuming after exhaustion.** A page iterator hands you each page's
+  `next_cursor` (or you know its page number). To resume an export after a
+  `request_failed`, start a new iterator from the last delivered page's
+  cursor, or the next page number. For numbered pages, the usual consistency
+  limits apply.
+
+### Time budget and cancellation
+
+- The budget starts at the **first `next()`**, not when the iterator is
+  created. It covers page requests, the client's per-attempt timeouts, retries
+  and `Retry-After`/backoff waits, **and the time your loop body takes between
+  items**. It is measured on the monotonic clock, so wall-clock corrections do
+  not move it, and a blocked event loop cannot overrun it unnoticed.
+- Immediately before any item or page is delivered, and before any request
+  starts, the signal and the budget are checked (the delivery gate above).
+  Nothing is delivered after either has fired: not a page accepted a moment
+  earlier, and not items already buffered from a page. A page that arrives
+  after the budget has passed is discarded. An iteration with nothing left to
+  deliver ends normally even if the budget passed meanwhile.
+- A stalled page request is interrupted at the budget or on abort, even with a
+  transport that ignores its signal.
+- Budget expiry is `PaginationError` (`reason: "time_budget"`), not
+  `TimeoutError`. A per-attempt or per-request `TimeoutError` that exhausts
+  the client's retries still propagates unchanged as `request_failed`. Each
+  page request is an ordinary request, so the client's `timeoutMs`, `retries`
+  and `totalTimeoutMs` apply to each page individually.
+- Timers and listeners exist only while a page request is in flight. Nothing
+  is left armed while your code holds control, or after the iteration ends,
+  even if you abandon the iterator without calling `return()`.
+
+### Diagnostics
+
+`PaginationError` (a `PostwaveError`, `status: 0`, `code`
+`pagination_<reason>`) carries `reason`, `operation` (for example
+`subscribers.list`), `pages`, `items` and, for `max_pages`/`time_budget`,
+`limit`. `progress.conflicts` holds fixed kind names only, never the
+conflicting numbers. It has no `payload`. Its message names the operation, counts, limits
+and, for malformed pages, the offending field name. It never includes cursors,
+filter values, list or webhook ids, URLs or row contents, which can contain
+subscriber data. Errors from the page requests themselves are the SDK's
+existing errors and are unchanged.
+
+### Consistency limits
+
+Iteration is **not a snapshot**. Each page is a separate request, and the
+collection can change between them.
+
+- **Offset paging** (list members, and subscribers until a cursor is offered)
+  can skip rows when earlier rows are deleted, and repeat rows when rows are
+  inserted before the current position. `total` is re-read on every page and
+  may change. The SDK detects the metadata such changes leave behind and then
+  reports `metadata_conflict` instead of `complete`. See
+  [Numbered pages and stale totals](#numbered-pages-and-stale-totals). A
+  change that leaves no trace in the metadata cannot be detected: for
+  example, one row deleted and another inserted before the current page,
+  leaving `total` unchanged.
+- **Keyset cursors** (subscribers once offered, webhooks, deliveries, audit)
+  are stable against inserts and deletes elsewhere in the collection, but a row
+  whose sort key changes mid-iteration can be seen twice or not at all.
+- Items are never de-duplicated (that would need unbounded memory). Key
+  idempotent writes on the item `id`.
+- Repeat detection remembers the last 1,024 cursors. A longer cycle is stopped
+  by `maxPages` instead.
+- For an export that must be exact, run it against a quiesced collection, or
+  reconcile afterwards by id.
+
 ## Error handling
 
 Every method throws a typed subclass of `PostwaveError`:
@@ -503,6 +833,7 @@ try {
 | --- | --- | --- | --- | --- |
 | `pw.request(method, path, opts)` | Yes | Yes | Yes | Yes |
 | Resource methods that accept a `signal`: `pushSuppressions.list/add/remove/bulkImport/bulkRemove`, `conversionIngest.ingest/ingestBatch`, `conversionIngestSecrets.list/issue/revoke`, `campaignTemplates.createDesign/getDesign/refineDesign/retryDesign/saveDesign/createCampaignFromDesign/archiveDesign/waitForDesign`, `sequences.getJob/waitForJob`, `voiceProfile.getIngestJob/waitForIngestJob` | Yes | Yes | No | Yes |
+| Pagination iterators (`subscribers.listPages/listAll`, `lists.membersPages/membersAll`, `webhooks.listPages/listAll/deliveriesPages/deliveriesAll`, `audit.queryPages/queryAll`) | Yes, per page | Yes, per page | No; `timeBudgetMs` bounds the whole iteration instead ([Pagination](#pagination)) | Yes |
 | Every other resource method, including `events.subscribe()` | Yes | Yes | No | No |
 | `GeneratedOperations` with a `PostwaveClient` transport | Yes | Yes | No | No |
 | `events.stream()` | **No** | **No** | **No** | Yes, enforced by the SDK; see below |

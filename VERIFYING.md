@@ -13,45 +13,50 @@ npm run verify
 The lockfile is authoritative. `verify` runs lint, TypeScript checks, generated
 operation drift checks, Vitest tests, the library build, ESM/CommonJS package
 export checks and the source audit. It does not run the separate offline suites.
-The prepared baseline has 530 unit tests in 52 files and 3 package checks.
+The prepared baseline has 620 unit tests in 54 files and 4 package checks.
 Report actual results after any change instead of assuming these counts persist.
 
 ## Offline checks without installed dependencies
 
 ```sh
+npm run --offline test:pagination:offline
 npm run --offline test:offline
-python3 scripts/audit-bundle.py
 npm run --offline check:events:offline
+python3 scripts/audit-bundle.py
 ```
 
-This baseline has 15 request/polling lifecycle checks and 54 event-stream
-checks (69 combined). The five older streaming diagnostic cases now all pass.
-They are regressions retained from the completed fixes, not open defects in
-this version. No task-specific pagination code has been implemented here.
+This baseline has 15 request/polling lifecycle checks, 54 event-stream checks
+and 79 pagination checks (148 combined). All five retained streaming diagnostics
+pass. Pagination includes public page/item APIs, isolation, real partial-body
+recovery, retry matrices and coverage guards. These are completed regressions,
+not intentionally seeded defects.
 
 These commands run TypeScript source using Node's native type transformation
 and the local resolver. They need no npm installation or network and block
 unmocked sockets. They do not lint, type-check, build, inspect package exports
-or replace the full fake-timer suite. A passing offline suite is a focused
-runtime result, not a full `verify` pass.
+or replace the full fake-timer suite. Offline success is not a full verify pass.
+
+For a failing suite that reports failures but stays alive because a timer leaked,
+Node's `--test-force-exit` flag is available for diagnosis. Keep the failure
+visible; forcing process exit does not repair a leak.
 
 ## Compatibility and lineage
 
-`BASELINE.json` records the previous public workbench revision and final event
-export incorporated in this baseline. Request deadlines and polling fixes are
-preserved. The event parser retains its complete-JSON-at-EOF compatibility and
-the 262,144 UTF-16-code-unit frame limit. Midstream U+FEFF remains content.
-Only a BOM at the very beginning of the stream is removed.
+`BASELINE.json` records the previous public workbench revision and the completed
+event/pagination exports incorporated here. Request deadlines and polling fixes
+are preserved. The event parser retains complete-JSON-at-EOF compatibility and
+its 262,144 UTF-16-code-unit frame limit. Only a BOM at the very beginning is
+removed; a midstream U+FEFF remains content. Subscriber cursor support follows
+the existing optional `next_cursor` in the OpenAPI contract.
 
 ## Reporting checks
 
 Keep command output, exit statuses and tool versions. Distinguish checks run
-in the active sandbox from an agent's report or an external local review. If
-a dependency is unavailable, report the limitation; do not substitute another
-version and describe it as locked verification.
+in the active sandbox from an agent's report or an external local review.
+If a dependency is unavailable, report it. A substitute dependency version
+does not establish verification against the lockfile.
 
-The source audit checks fixture patterns, excluded source boundaries and
-license labels. It does not certify live backend behavior, exhaustive security
-or every uploader's scanner. Inspect the actual ZIP for Git metadata, caches,
-installed dependencies, build output, personal data and credentials. The ZIP
-must retain `.gitignore`. Synthetic fixtures are disclosed in `FIXTURES.md`.
+The source audit checks fixture patterns, upload boundaries and license labels.
+It does not certify a live backend, exhaustive security or every uploader's
+scanner. Inspect the actual ZIP for Git metadata, caches, dependencies, builds,
+personal data and credentials. Retain `.gitignore`, `LICENSE` and `FIXTURES.md`.

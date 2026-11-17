@@ -1,5 +1,18 @@
 import { Resource } from "./_base.js";
+import type { PostwaveClient } from "../client.js";
 import type { Subscriber, SubscriberPage } from "../types.js";
+import {
+  checkPageSize,
+  checkStartCursor,
+  checkStartPage,
+  iterateItems,
+  iteratePages,
+  snapshotParams,
+  type ItemIterationOptions,
+  type PageIterationOptions,
+  type PaginatedIterator,
+  type PaginationSpec,
+} from "../lib/pagination.js";
 
 export type ProfileTransform =
   | "copy"
@@ -181,12 +194,38 @@ export class SubscribersResource extends Resource {
   }
 
   list(params: ListSubscribersParams = {}): Promise<SubscriberPage> {
-    return this.client.request("GET", "/api/v1/subscribers", {
-      query: params as Record<
-        string,
-        string | number | boolean | null | undefined
-      >,
-    });
+    return requestSubscriberPage(this.client, params);
+  }
+
+  /**
+   * Iterate subscriber pages lazily, typed as the `SubscriberPage` contract.
+   *
+   * Filters (`q`, `status`, `sort`, `order`, `include_archived`, `per_page`)
+   * are copied once and sent unchanged with every page. `page` or `cursor`
+   * choose where to start. Paging starts by offset and switches to the keyset
+   * `next_cursor` as soon as the server returns one, then follows only the
+   * cursor. `per_page` must be 1-200 (the contract maximum). See "Pagination"
+   * in SDK-REFERENCE.md for stop behavior.
+   */
+  listPages(
+    params: ListSubscribersParams = {},
+    options: PageIterationOptions = {},
+  ): PaginatedIterator<SubscriberPage> {
+    return iteratePages<SubscriberPage>(
+      subscriberListSpec(this.client, params),
+      options,
+    );
+  }
+
+  /** Iterate subscribers one at a time across pages. See {@link listPages}. */
+  listAll(
+    params: ListSubscribersParams = {},
+    options: ItemIterationOptions = {},
+  ): PaginatedIterator<Subscriber> {
+    return iterateItems<Subscriber>(
+      subscriberListSpec(this.client, params),
+      options,
+    );
   }
 
   get(id: string): Promise<Subscriber> {
@@ -414,4 +453,41 @@ export class SubscribersResource extends Resource {
       { query: params },
     );
   }
+}
+
+type QueryRecord = Record<string, string | number | boolean | null | undefined>;
+
+/** The one definition of `GET /api/v1/subscribers`, for both paths. */
+function requestSubscriberPage(
+  client: PostwaveClient,
+  params: ListSubscribersParams,
+  signal?: AbortSignal,
+): Promise<SubscriberPage> {
+  return client.request("GET", "/api/v1/subscribers", {
+    query: params as QueryRecord,
+    ...(signal ? { signal } : {}),
+  });
+}
+
+function subscriberListSpec(
+  client: PostwaveClient,
+  params: ListSubscribersParams,
+): PaginationSpec {
+  const operation = "subscribers.list";
+  const { page, cursor, ...filters } = snapshotParams(operation, params);
+  checkPageSize(operation, "per_page", filters.per_page, 200);
+  const startCursor = checkStartCursor(operation, cursor);
+  return {
+    operation,
+    itemsKey: "items",
+    cursorKey: "next_cursor",
+    offset: true,
+    // A resume cursor wins over page, as on the server.
+    start:
+      startCursor !== undefined
+        ? { cursor: startCursor }
+        : { page: checkStartPage(operation, page) },
+    fetch: (continuation, signal) =>
+      requestSubscriberPage(client, { ...filters, ...continuation }, signal),
+  };
 }

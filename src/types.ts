@@ -84,6 +84,12 @@ export interface SubscriberPage {
   total: number;
   page: number;
   per_page: number;
+  /**
+   * Opaque keyset cursor for the next page, when the server offers one (the
+   * contract's optional `SubscriberPage.next_cursor`; default sort only).
+   * Absent on the last page.
+   */
+  next_cursor?: string;
 }
 
 // ---------- migrations ----------

@@ -1,13 +1,14 @@
 {
   "name": "Moosewave TypeScript SDK workbench",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "prepared_on": "2026-11-17",
   "repository": "https://github.com/harsh2929/postwave-mit-workbench",
-  "previous_public_commit": "e43abc588c0ca6889b54f9ecc06644dc8e87b606",
+  "previous_public_commit": "61a5a84f1f58cd985d1e6f072d9f2aee213267b5",
   "integrated_work": [
     "Request attempt and overall deadlines, cancellation, retry waits and polling lifecycles from the completed request-lifecycle baseline.",
-    "Incremental event parsing independent of transport boundaries, demand-driven 8 KiB decoding, cancellation/cleanup/isolation, Unicode frame limits and the exact midstream-BOM regression from the final reviewed event-stream export."
+    "Incremental event parsing independent of transport boundaries, demand-driven 8 KiB decoding, cancellation/cleanup/isolation, Unicode frame limits and the exact midstream-BOM regression from the final reviewed event-stream export.",
+    "Completed lazy typed page/item pagination across five resource surfaces, delivery-gate cancellation/deadlines, conservative metadata conflicts, isolation, retries and real mid-response truncation regressions from the final pagination export."
   ],
   "event_export_sha256": "556f9b58c27d3958789a5c07569b55b9db913cc0d17d4897c7d5ca67fe2c3b10",
   "retained_compatibility": [
@@ -16,14 +17,16 @@
     "Frame limit measured in UTF-16 code units, not UTF-8 bytes."
   ],
   "starting_counts": {
-    "unit_tests": 530,
-    "unit_test_files": 52,
-    "package_export_checks": 3,
+    "unit_tests": 620,
+    "unit_test_files": 54,
+    "package_export_checks": 4,
     "offline_lifecycle_checks": 15,
     "offline_event_checks": 54,
-    "offline_total": 69,
+    "offline_pagination_checks": 79,
+    "offline_total": 148,
     "legacy_stream_diagnostics": 5
   },
   "credentials": "Only synthetic, explicitly marked fixtures; no live service is needed. See FIXTURES.md.",
-  "scope": "SDK source and fixed contract fixtures. No product backend, deployment configuration or new pagination implementation is included."
+  "scope": "Existing SDK source, completed pagination and fixed contract fixtures. No product backend or deployment configuration is included.",
+  "pagination_export_sha256": "8d191e41f5386aaf1cd5aa56adee90e00cb31d5f0729cb3fd5abae3812059eea"
 }

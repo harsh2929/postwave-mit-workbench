@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: MIT
 
 import { Resource } from "./_base.js";
+import type { PostwaveClient } from "../client.js";
+import {
+  checkPageSize,
+  checkStartPage,
+  iterateItems,
+  iteratePages,
+  snapshotParams,
+  type ItemIterationOptions,
+  type PageIterationOptions,
+  type PaginatedIterator,
+  type PaginationSpec,
+} from "../lib/pagination.js";
 
 export interface List {
   id: number;
@@ -114,17 +126,39 @@ export class ListsResource extends Resource {
     listId: number | string,
     params: ListMembersParams = {},
   ): Promise<ListMembersPage> {
-    const id = String(listId).trim();
-    if (!id) throw new Error("List ID is required");
-    const query: Record<string, string | number | undefined> = {};
-    if (params.q !== undefined && params.q !== "") query.q = params.q;
-    if (params.status !== undefined) query.status = params.status;
-    if (params.page !== undefined) query.page = params.page;
-    if (params.per_page !== undefined) query.per_page = params.per_page;
-    return this.client.request(
-      "GET",
-      `/api/v1/lists/${encodeURIComponent(id)}/subscribers`,
-      { query },
+    return requestMembersPage(this.client, memberListId(listId), params);
+  }
+
+  /**
+   * Iterate one list's member pages lazily, typed as `ListMembersPage`.
+   *
+   * The list id and filters (`q`, `status`, `per_page`) are fixed when the
+   * iterator is created. `page` chooses the first page. The contract is
+   * offset-only, so iteration ends on an empty page or once
+   * `page * per_page >= total`. `per_page` must be 1-200 (the server cap).
+   * An empty list id throws immediately, as `members()` does. See
+   * "Pagination" in SDK-REFERENCE.md.
+   */
+  membersPages(
+    listId: number | string,
+    params: ListMembersParams = {},
+    options: PageIterationOptions = {},
+  ): PaginatedIterator<ListMembersPage> {
+    return iteratePages<ListMembersPage>(
+      membersSpec(this.client, listId, params),
+      options,
+    );
+  }
+
+  /** Iterate one list's members one at a time. See {@link membersPages}. */
+  membersAll(
+    listId: number | string,
+    params: ListMembersParams = {},
+    options: ItemIterationOptions = {},
+  ): PaginatedIterator<ListMember> {
+    return iterateItems<ListMember>(
+      membersSpec(this.client, listId, params),
+      options,
     );
   }
 
@@ -146,4 +180,48 @@ export class ListsResource extends Resource {
       `/api/v1/lists/${encodeURIComponent(String(id))}`,
     );
   }
+}
+
+function memberListId(listId: number | string): string {
+  const id = String(listId).trim();
+  if (!id) throw new Error("List ID is required");
+  return id;
+}
+
+/** The one definition of `GET /api/v1/lists/{id}/subscribers`, for both paths. */
+function requestMembersPage(
+  client: PostwaveClient,
+  id: string,
+  params: ListMembersParams,
+  signal?: AbortSignal,
+): Promise<ListMembersPage> {
+  const query: Record<string, string | number | undefined> = {};
+  if (params.q !== undefined && params.q !== "") query.q = params.q;
+  if (params.status !== undefined) query.status = params.status;
+  if (params.page !== undefined) query.page = params.page;
+  if (params.per_page !== undefined) query.per_page = params.per_page;
+  return client.request(
+    "GET",
+    `/api/v1/lists/${encodeURIComponent(id)}/subscribers`,
+    { query, ...(signal ? { signal } : {}) },
+  );
+}
+
+function membersSpec(
+  client: PostwaveClient,
+  listId: number | string,
+  params: ListMembersParams,
+): PaginationSpec {
+  const operation = "lists.members";
+  const id = memberListId(listId);
+  const { page, ...filters } = snapshotParams(operation, params);
+  checkPageSize(operation, "per_page", filters.per_page, 200);
+  return {
+    operation,
+    itemsKey: "items",
+    offset: true,
+    start: { page: checkStartPage(operation, page) },
+    fetch: (continuation, signal) =>
+      requestMembersPage(client, id, { ...filters, ...continuation }, signal),
+  };
 }

@@ -37,12 +37,23 @@ export {
   RequestAbortedError,
   WrongRegionError,
   ParseError,
+  PaginationError,
 } from "./errors.js";
 export type {
   PostwaveResponseMetadata,
   SendingCapOutcome,
   TimeoutScope,
+  PaginationFailureReason,
 } from "./errors.js";
+
+export type {
+  PageIterationOptions,
+  ItemIterationOptions,
+  PaginatedIterator,
+  PaginationProgress,
+  PaginationStopReason,
+  PaginationMetadataConflict,
+} from "./lib/pagination.js";
 
 export {
   verifySignature,
@@ -252,6 +263,8 @@ export type {
   WebhookDeliveryPage,
   WebhookCreateResponse,
   WebhookListPage,
+  WebhookListParams,
+  WebhookDeliveryListParams,
   WebhookReplayResponse,
   WebhookTestResult,
 } from "./resources/webhooks.js";
@@ -289,6 +302,9 @@ export type {
 
 export { TopicsResource } from "./resources/topics.js";
 export type { TopicCreateInput } from "./resources/topics.js";
+
+export { SubscribersResource } from "./resources/subscribers.js";
+export type { ListSubscribersParams } from "./resources/subscribers.js";
 
 export { AuditResource } from "./resources/audit.js";
 export type {

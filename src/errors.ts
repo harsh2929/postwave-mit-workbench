@@ -293,6 +293,61 @@ export class WrongRegionError extends PostwaveError {
   }
 }
 
+/**
+ * Why a pagination iterator stopped before the collection ended, when that
+ * stop is reported as a {@link PaginationError}.
+ *
+ * - `max_pages`: the finite page guard (`maxPages`) was reached while the
+ *   server still reported more data.
+ * - `time_budget`: the iteration's overall `timeBudgetMs` ran out.
+ * - `malformed_page`: a page did not match its response contract.
+ * - `repeated_continuation`: the server handed back continuation data that
+ *   this iteration had already used (a cursor or page number), which would
+ *   otherwise loop or re-deliver rows.
+ */
+export type PaginationFailureReason =
+  | "max_pages"
+  | "time_budget"
+  | "malformed_page"
+  | "repeated_continuation";
+
+/**
+ * A pagination iterator stopped before the collection ended. The export is
+ * INCOMPLETE: `pages` and `items` say how much was delivered first.
+ *
+ * Deliberately carries no payload. The message and fields name the operation,
+ * counts, configured limits and (for malformed pages) the offending field name
+ * only. Never cursors, filter values, identifiers or row contents, which can
+ * hold subscriber data.
+ */
+export class PaginationError extends PostwaveError {
+  readonly reason: PaginationFailureReason;
+  /** The single-page operation being iterated, e.g. `subscribers.list`. */
+  readonly operation: string;
+  /** Pages that passed the delivery gate before the stop (see `PaginationProgress.pages`). */
+  readonly pages: number;
+  /** Items delivered to the consumer before the stop. */
+  readonly items: number;
+  /** The configured limit that stopped iteration (`maxPages` or `timeBudgetMs`). */
+  readonly limit: number | undefined;
+  constructor(opts: {
+    reason: PaginationFailureReason;
+    operation: string;
+    message: string;
+    pages: number;
+    items: number;
+    limit?: number;
+  }) {
+    super(opts.message, { status: 0, code: `pagination_${opts.reason}` });
+    this.name = "PaginationError";
+    this.reason = opts.reason;
+    this.operation = opts.operation;
+    this.pages = opts.pages;
+    this.items = opts.items;
+    this.limit = opts.limit;
+  }
+}
+
 export class ParseError extends PostwaveError {
   constructor(
     opts: {

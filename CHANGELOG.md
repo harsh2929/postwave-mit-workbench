@@ -4,6 +4,18 @@ All notable changes to `@postwave/sdk` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## 0.4.0 — 2026-11-17
+
+- Integrate completed typed pagination, cancellation/deadline delivery gates,
+  conservative completion reporting and isolated concurrent traversals.
+- Preserve retry recovery, exact partial progress and observed mid-response
+  truncation tests across the public pagination methods.
+- Record the completed baseline: 620 unit tests, 4 package checks, 148 focused
+  offline checks and 5 retained stream diagnostics.
+- Refresh verification and lineage documentation without changing dependency pins.
+
 ## 0.3.0 — 2026-11-17
 
 - Integrate the reviewed event-stream parser, cancellation, resource-release
@@ -13,7 +25,67 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   package export guard. Existing mock-only stream diagnostics now pass.
 - Record baseline lineage and keep offline checks separate from full verification.
 
-## [Unreleased]
+## Detailed changes integrated through 0.4.0
+
+### Added
+
+- Lazy, typed pagination iterators on one shared engine:
+  `subscribers.listPages/listAll`, `lists.membersPages/membersAll`,
+  `webhooks.listPages/listAll`, `webhooks.deliveriesPages/deliveriesAll` and
+  `audit.queryPages/queryAll`. Page iterators yield each contract page
+  unchanged; item iterators yield its entries. Both expose `progress`
+  (`pages`, `items`, `done`, `complete`, `stopReason`).
+- Iteration options: `signal`; a finite page guard `maxPages` (default 1000,
+  `Infinity` rejected); `maxItems` (item iterators only, ends normally); and
+  `timeBudgetMs`, an overall budget that starts at the first `next()` and
+  includes retry/backoff waits and time spent in the consumer's loop body.
+- One delivery rule for page and item iterators: a single gate runs
+  synchronously immediately before every yield. A page accepted just before
+  a cancellation or budget expiry is not yielded; the iterator rejects, as an
+  item iterator does for that page's items. `progress.pages` counts pages
+  that passed that gate in both iterator kinds.
+- Conservative completion for numbered (offset) pages. A changed `total` or
+  `per_page`, an empty or short page before `total`, or more rows than
+  `total` ends iteration as `stopReason: "metadata_conflict"` with
+  `complete: false`, and `progress.conflicts` names each kind
+  (`PaginationMetadataConflict`). Continuation rules and request counts are
+  unchanged. A genuinely empty collection (`total: 0`) remains complete.
+- `PaginationError` (`reason`: `max_pages`, `time_budget`, `malformed_page`,
+  `repeated_continuation`; `code` `pagination_<reason>`). A page guard or
+  time budget that stops an unfinished collection always rejects with it and
+  never ends silently. Its diagnostics hold counts, limits and field names,
+  never cursors, filter values, ids or rows.
+- Subscriber iteration starts by offset and switches to the contract's
+  keyset `next_cursor` once the server offers it. `SubscriberPage` gains the
+  contract's optional `next_cursor` field.
+- Public types `PaginatedIterator`, `PageIterationOptions`,
+  `ItemIterationOptions`, `PaginationProgress`, `PaginationStopReason`,
+  `PaginationFailureReason`, `PaginationMetadataConflict`,
+  `ListSubscribersParams`, `WebhookListParams`
+  and `WebhookDeliveryListParams`. The `SubscribersResource` class is now
+  exported like the other resources.
+- `npm run test:pagination:offline` (dependency-free, 79 shared cases: 12
+  concurrent traversals of all ten public iterator methods on one client and
+  18 retry/recovery cases among them), now also part of `test:offline`. Cases that need success inside
+  a time budget advance the SDK's monotonic clock instead of relying on
+  real-time margins, so a slow or paused machine cannot fail them.
+- Reference: "Concurrent traversals" documents isolation between iterators on
+  one client and the behavior of a shared caller signal.
+- Reference: "Retries and recovery" documents how the client's retry policy
+  applies per page. A retry re-requests the same page, so nothing is skipped
+  or repeated. Exhausted retries surface the last attempt's error with exact
+  partial progress. `maxPages` counts pages, not attempts. Budgets and
+  cancellation cover retries and backoff waits. 18 shared retry cases (both
+  runners) cover it, including matrices of all ten iterator methods x six
+  failure kinds for recovery and for exhaustion, and a truncation proof
+  where a real page prefix reaches the SDK's reader before the connection
+  fails. A fake-timer boundary check is added as well. No runtime change was
+  needed.
+
+The single-page methods (`subscribers.list`, `lists.members`,
+`webhooks.list`, `webhooks.deliveriesList`, `webhooks.deliveries`,
+`audit.query`) send the same requests and return the same results as before.
+The webhook parameter types are now named interfaces with the same shape.
 
 ### Changed
 
