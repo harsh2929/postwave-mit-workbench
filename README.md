@@ -2,6 +2,14 @@
 
 This is the existing Moosewave/Postwave TypeScript SDK isolated from the larger application. It includes its client/resources, generated operation types, webhook verification, examples, tests and a small API-contract snapshot. First-party source is MIT-licensed; retain [LICENSE](LICENSE). It is a real client-library codebase, not a new application scaffold.
 
+## Current source baseline
+
+Version 0.3.0 incorporates the completed request/polling lifecycle fixes and
+all reviewed event-stream fixes, including the final midstream-BOM regression.
+The separate streaming diagnostic now passes all five checks. `BASELINE.json`
+records the source lineage and starting test counts; those counts describe
+this baseline, not the outcome of any later change.
+
 ## Requirements
 
 - Node.js 22.18 or later
@@ -77,34 +85,39 @@ npm run --offline test:events:offline
 npm run --offline test:offline
 ```
 
-`test:events:offline` runs ten compatibility cases against `events.stream()`:
-transport/auth headers and filters, LF data lines, complete CRLF frames,
-the existing complete-JSON-at-EOF behavior, malformed and complete oversized
-frames, fragmented UTF-8, HTTP error mapping, consumer early exit, ordered event
-batches and single-connection behavior despite configured request retries.
-`test:offline` runs both focused suites (25 tests in this release).
+`test:events:offline` runs 54 cases against `events.stream()`. Eight are the
+compatibility baseline: transport/auth headers and filters, LF data lines,
+complete CRLF frames, the existing complete-JSON-at-EOF behavior, malformed
+and complete oversized frames, fragmented UTF-8, HTTP error mapping and
+consumer early exit. The other 46 are stream-hardening regressions:
+identical results at every chunk split point (including CRLF split between
+chunks), the frame limit (262,144 UTF-16 code units) at its exact boundary, oversized-frame and
+malformed-input recovery, cancellation before and during connect, during
+reads and between events with a transport and body that ignore their signal,
+an abort after the transport resolves but before the body is read, an abort
+after the final end-of-stream event, `break` after an abort, `break` with a
+body whose `cancel()` never settles, reader/listener release on end of
+stream, dropped connections and HTTP error bodies, demand-driven parsing of
+a 10,000-event chunk, reads (event chunk, end of stream, HTTP error body)
+that settle just before an abort, an abort at the hand-off after the HTTP
+error text is read but before it is parsed, overlapping streams on one
+client with independent and shared signals, and demand-driven UTF-8
+decoding: bounded decoding per event, frames larger than a decode window,
+sliced buffers, characters and CRLF split by window or chunk boundaries,
+cancellation (with a negative control) and interleaved streams, and the
+frame limit with a leading BOM (whole or fragmented), a U+FEFF after an
+oversized frame (content, not a BOM), multi-byte characters and a
+surrogate pair at the boundary. Decode and
+parse work is checked by counting bytes and parses, not by timing.
+`test:offline` runs both focused suites (69 tests).
 
-These are baseline checks. They do not prove complete SSE conformance,
-fragmented-frame recovery or cancellation with a non-cooperative transport.
-The full event suite remains `tests/events-stream.test.ts`, run by `verify`.
+These are focused checks, not a proof of complete SSE conformance: only
+`data` fields are used and there is no reconnection. The full event suite
+remains `tests/events-stream.test.ts`, run by `verify`, which covers the
+same cases plus the original vitest cases.
 If behavior changes, add regression cases for it in the appropriate suites.
 Neither offline command replaces linting, type checking, build verification
 or the other checks in `npm run verify`.
-
-### Known streaming defects
-
-```sh
-npm run --offline diagnose:events:offline
-npm run --offline check:events:offline
-```
-
-The diagnostic reports five existing defects with mock transports: split CRLF
-framing, discarding an oversized frame, pre-aborted requests, cancellation
-during a stalled read and HTTP-error reader release. The strict check
-**currently exits 1**, expected on this starting version. It is not part of
-`verify`. Fixing those defects should make it exit 0. Neither the diagnostic
-nor the passing compatibility cases exhaustively cover stream correctness.
-See [VERIFYING.md](VERIFYING.md) for the different verification levels.
 
 See [SDK-REFERENCE.md](SDK-REFERENCE.md) for the original client API, and [FIXTURES.md](FIXTURES.md) for the test-data and pinned-contract boundary. Library examples that target a live service are reference code; they are not run by verification and require credentials supplied by the operator.
 

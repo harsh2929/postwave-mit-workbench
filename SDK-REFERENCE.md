@@ -9,8 +9,8 @@ MIT licensed as Layer 2 of the Moosewave open-core architecture.
 - Exponential-backoff retries on 429 / 5xx (with `Retry-After` honoring).
 - Per-attempt timeouts covering the response body, an optional overall
   request budget, and cancellation at any point via `AbortSignal`, for every
-  request/response call. The long-lived `events.stream()` is the documented
-  exception.
+  request/response call. The long-lived `events.stream()` has no SDK
+  timeouts, but its `signal` cancels it at any point.
 - Constant-time HMAC-SHA256 webhook signature verification.
 - Hand-written — no codegen toolchain — kept in lockstep with `packages/openapi`.
 
@@ -425,7 +425,8 @@ a `requestId` you can include in support tickets.
 Three independent bounds apply to every call made through
 `PostwaveClient.request()`. That covers every resource method **except
 `events.stream()`**, which is a long-lived stream and deliberately does not
-use `request()` (see [Which operations get these guarantees](#which-operations-get-these-guarantees)).
+use `request()`. It has caller cancellation but no timeouts (see
+[Which operations get these guarantees](#which-operations-get-these-guarantees)).
 
 | Bound | Set with | Default | Covers | On expiry |
 | --- | --- | --- | --- | --- |
@@ -504,7 +505,7 @@ try {
 | Resource methods that accept a `signal`: `pushSuppressions.list/add/remove/bulkImport/bulkRemove`, `conversionIngest.ingest/ingestBatch`, `conversionIngestSecrets.list/issue/revoke`, `campaignTemplates.createDesign/getDesign/refineDesign/retryDesign/saveDesign/createCampaignFromDesign/archiveDesign/waitForDesign`, `sequences.getJob/waitForJob`, `voiceProfile.getIngestJob/waitForIngestJob` | Yes | Yes | No | Yes |
 | Every other resource method, including `events.subscribe()` | Yes | Yes | No | No |
 | `GeneratedOperations` with a `PostwaveClient` transport | Yes | Yes | No | No |
-| `events.stream()` | **No** | **No** | **No** | Passed straight to `fetch`; see below |
+| `events.stream()` | **No** | **No** | **No** | Yes, enforced by the SDK; see below |
 
 Resource methods do not forward a per-call budget. To give one call its own
 budget or cancellation when its method has no `signal` option, either use
@@ -520,27 +521,112 @@ locally held operations) have no lifecycle to bound.
 `events.stream()` opens a Server-Sent Events connection that is meant to stay
 open indefinitely, so it calls the transport directly (`fetchRaw`) instead of
 `request()`. Applying a per-attempt timeout or overall budget would cut off a
-healthy stream. Its behaviour is therefore different, and unchanged by the
-lifecycle work:
+healthy stream, so it has no SDK deadline. Cancellation and cleanup, however,
+are enforced by the SDK:
 
 - **No SDK deadline.** Neither `timeoutMs` nor `totalTimeoutMs` applies, to
   connecting or to reading. A stream that stalls stays open until you cancel
   it.
 - **No retries or reconnection.** A failed connect, an HTTP error or a
   dropped stream ends the iteration; reconnecting is up to you.
-- **Cancellation depends on the transport.** Your `signal` is passed straight
-  to `fetch`, with no SDK race around it. The platform `fetch` ends the
-  connection on abort. A custom transport that ignores its signal keeps the
-  stream open. A signal that is already aborted is still handed to the
-  transport.
-- **Errors are not normalised like `request()`'s.** An abort surfaces as the
-  transport's own error (typically a `DOMException` named `AbortError`), not
-  `RequestAbortedError`. Transport failures surface as thrown, not as
-  `NetworkError`. A non-2xx response *is* mapped to the usual typed error
-  (for example `ServerError`) after at most 64 KiB of its body is read.
-- **Stopping consumption releases the connection.** Leaving the
-  `for await` loop (`break`, `return` or a thrown error) cancels the
-  response body and releases its reader.
+- **Cancellation is enforced by the SDK.** The request is sent on the first
+  `next()`, not when `stream()` is called. If the `signal` has already
+  aborted by then, iteration rejects without calling `fetch`. An abort at any
+  later point (while connecting, while reading the body or an HTTP error
+  body, or while your loop body runs) makes the pending `next()` reject with
+  `RequestAbortedError`, with the abort reason as its `payload`. If no
+  `next()` is pending, the next one rejects. This also applies after the
+  final event has been delivered. Leaving the loop with `break` or `return`
+  after an abort ends quietly, without an error. Once iteration has finished
+  (`done: true`) or already rejected, a later abort changes nothing. The SDK
+  races every wait on the transport against the signal, so this holds even
+  for a custom transport or body that ignores it.
+- **Nothing is processed after an abort.** Once the signal has aborted, no
+  event is yielded, and nothing further is decoded or parsed. That includes
+  events still buffered from an earlier chunk, the undecoded rest of a chunk
+  already received, and data from a read that completed just before the
+  abort was observed. That data is discarded unread. The same applies to an HTTP error body.
+- **The body is cancelled on abort.** If the stream is reading the event
+  body or is paused in your loop body, the body is cancelled synchronously
+  from the abort, even if you never resume the iterator. If the abort lands
+  while the SDK has another step pending (the transport has just resolved,
+  or an HTTP error body is being read), it is cancelled as soon as that step
+  resumes. This does not wait for the transport. A response that arrives
+  only after the abort has its body cancelled on arrival. Whether
+  cancelling the body frees the underlying connection is up to the
+  transport. The SDK also aborts the signal it passed to the transport
+  (next item).
+- **Each call is independent.** Every `stream()` call has its own request,
+  parser and cleanup. Streams on the same client, or sharing one `signal`,
+  do not affect each other. Aborting a shared signal rejects each of them
+  with the same reason. The SDK never aborts your signal: ending, breaking
+  out of or failing one stream leaves it, and any other stream using it,
+  untouched.
+- **The transport receives an SDK-owned signal**, linked to yours. It aborts
+  with your reason when you abort. It also aborts whenever the stream ends
+  any other way than reading the body to its end: leaving the loop early, an
+  HTTP error or a transport error. A transport that honours its signal can
+  then tear the request down. It is not aborted when the stream ends
+  normally.
+- **Errors.** A non-2xx response is mapped to the usual typed error (for
+  example `ServerError`) after at most 64 KiB of its body is read. A larger
+  or unreadable error body is cancelled and the error carries no payload, as
+  before. Transport failures other than your abort (a failed connect, a
+  dropped connection) surface as thrown by the transport, not as
+  `NetworkError`. If the signal has aborted by the time any of these would
+  be reported, `RequestAbortedError` is reported instead.
+- **Every exit releases the body.** The reader is released on every exit:
+  the end of the stream, leaving the `for await` loop (`break`, `return` or
+  a thrown error), an abort, a transport error or an HTTP error. Every exit
+  before the end of the body also cancels it. A body whose `cancel()` never
+  settles does not delay your `break`.
+- **Parsing does not depend on chunking.** LF, CRLF and CR line endings are
+  accepted, including a CRLF split across two chunks, and multi-line `data`
+  fields are joined. Only `data` is used. Comments and other fields (`event`,
+  `id`, `retry`) are ignored. A frame that is not valid JSON, is not an event
+  record, or is longer than the frame limit is skipped, and parsing resumes
+  after the blank line that ends it. The lines of a skipped oversized frame are never
+  read as frames of their own. For compatibility, a final frame that has
+  valid data but no closing blank line is still delivered at end of stream.
+  An oversized final frame is not.
+- **The frame limit counts string units, not bytes.** The limit is 262,144
+  UTF-16 code units: JavaScript string length, measured on the decoded text,
+  not UTF-8 bytes. It covers all of the frame's lines (comments and other
+  fields included), with each line break counting as one whatever its form,
+  and excludes the blank line that ends the frame. A character outside the
+  Basic Multilingual Plane, such as most emoji, counts as two. A frame at
+  the limit is 262,144 bytes if it is ASCII, but can be up to about three
+  times as many bytes of 3-byte characters such as CJK text, and is still
+  kept. A leading byte-order mark is removed during decoding and does not
+  count. Only one, at the very start of the stream, is removed. A U+FEFF
+  anywhere else is content, including at the start of a line right after a
+  skipped oversized frame. A line that starts with one has no `data` field,
+  so its frame yields no event.
+- **Decoding and parsing follow demand.** Each `next()` decodes and parses
+  only as far as the next valid event. The current transport chunk is
+  decoded from UTF-8 in windows of at most 8 KiB, and the next window is
+  decoded only when parsing needs more text. So one `next()` decodes at most
+  8 KiB beyond the end of the frame it returns, plus any frames it skips (a
+  malformed or oversized frame still has to be decoded to find where it
+  ends). A chunk holding thousands of events is not decoded or turned into
+  records up front, and after `break` or an abort the rest of it is never
+  decoded or parsed. A character or CRLF split across chunks or windows is
+  decoded as if the bytes were contiguous.
+- **What is retained.** The SDK holds the current chunk's bytes, by
+  reference and not copied, until they have all been decoded or the stream
+  stops. An abort, `break` or error drops them at once, even if you never
+  resume the iterator. A consumer that simply stops calling `next()`,
+  without `break` or an abort, keeps them. Holding the chunk also keeps
+  alive any larger buffer it is a view into.
+  Beyond the chunk, it holds at most one decoded window (8 KiB of bytes),
+  the current frame's text and up to 3 bytes of an incomplete character.
+  The frame's text is bounded by the frame limit of 262,144 code units.
+  JavaScript engines store up to 2 bytes per unit, so that is up to 512 KiB,
+  plus temporary copies while a complete frame is joined and parsed. Because decoding is deferred, a custom
+  transport that reuses or modifies a chunk's buffer after delivering it
+  would change what is decoded. Previously each chunk was decoded as soon
+  as it was read, so this did not matter. Deliver each chunk in its own
+  buffer.
 
 To bound how long you wait for the connection or the next event, own the
 deadline yourself. Use a controller you abort from your own timer and reset

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Mock-only reproductions of open streaming defects. --check fails until fixed.
-// This diagnostic is intentionally separate from the passing baseline suites.
+// Mock-only regressions for the previously fixed streaming defects.
+// --check exits nonzero if a regression returns; separate from the offline suites.
 import assert from "node:assert/strict";
 import { PostwaveClient, RequestAbortedError, NotFoundError } from "../src/index.ts";
 
@@ -88,7 +88,7 @@ await check("caller cancellation interrupts an uncooperative body read", async (
     assert.ok(cancellations > 0, "cancel the abandoned response body");
     assert.equal(body.locked, false, "release the response reader");
   } finally {
-    // Close the fixture so the known-bad baseline can finish without hanging.
+    // Close the fixture so a regressed implementation can finish without hanging.
     try { source.close(); } catch { /* already cancelled */ }
     await observe(operation);
   }

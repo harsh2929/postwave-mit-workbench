@@ -4,22 +4,99 @@ All notable changes to `@postwave/sdk` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0 — 2026-11-17
+
+- Integrate the reviewed event-stream parser, cancellation, resource-release
+  and demand-driven UTF-8 decoding improvements into the public workbench.
+- Preserve the completed request and polling lifecycle improvements.
+- Include the final oversized-frame/midstream-U+FEFF regression and public
+  package export guard. Existing mock-only stream diagnostics now pass.
+- Record baseline lineage and keep offline checks separate from full verification.
+
 ## [Unreleased]
 
-## [0.2.1-workbench] - 2026-11-16
+### Changed
 
-### Added
+- `events.stream()` cancellation is now enforced by the SDK and reported
+  consistently. An abort at any point rejects with `RequestAbortedError`
+  (`code: "request_aborted"`, abort reason in `payload`) instead of the
+  transport's own error (typically a `DOMException` named `AbortError`).
+  Code that checks `err.name === "AbortError"` should check
+  `err instanceof RequestAbortedError` or `signal.aborted` instead.
+  `RequestAbortedError` is a `NetworkError`.
+- `events.stream()` with an already-aborted `signal` now rejects without
+  calling `fetch`. It was previously handed to the transport.
+- After an abort, `events.stream()` yields no further events, including
+  events still buffered from the same chunk, and the next `next()` rejects
+  with `RequestAbortedError` even when the final event has already been
+  delivered. Only an iteration that has already finished (`done: true`)
+  ignores a later abort.
+- `events.stream()` parses on demand: each `next()` parses only as far as
+  the next valid event, instead of parsing a whole transport chunk first.
+  Records, their order and which frames are skipped are unchanged.
+- `events.stream()` also decodes on demand. A transport chunk is decoded
+  from UTF-8 in windows of at most 8 KiB, only as parsing needs more text,
+  instead of all at once when it arrives. A `next()` decodes at most one
+  window beyond the frame it returns (plus any frames it skips), and after
+  `break` or an abort the rest of the chunk is never decoded. Records are
+  unchanged, including characters split across chunks or windows. The
+  undecoded chunk is now held by reference until it is used up, so a custom
+  transport that reuses or modifies a chunk's buffer after delivering it
+  would change what is decoded. Reading every event costs somewhat
+  more (about 10-25% in local measurements on 0.8-1.5 MB chunks), while the
+  first event of a large chunk arrives several times sooner.
+- Documentation: the `events.stream()` frame limit is 262,144 UTF-16 code
+  units (JavaScript string length of the decoded frame), not 256 KiB of
+  UTF-8 bytes as earlier text for this release said. A frame of multi-byte
+  characters at the limit can be up to about three times as many bytes and
+  is kept. A leading BOM is removed during decoding and does not count. The
+  limit itself is unchanged.
+- The transport now receives an SDK-owned `signal` linked to the caller's
+  instead of the caller's signal itself. It aborts with the caller's reason,
+  and also when the consumer stops iterating early. Transport errors other
+  than a caller abort, and HTTP error mapping, are unchanged.
 
-- Mock-only streaming diagnostics for five existing parser, cancellation and
-  reader-cleanup defects. `check:events:offline` intentionally exits 1 until
-  those defects are fixed; it is separate from the passing baseline suites.
-- Two additional offline stream compatibility checks covering ordered event
-  batches and single-connection behavior despite configured request retries.
-- VERIFYING.md distinguishes offline checks, full verification and known-defect
-  diagnostics. FIXTURES.md inventories retained synthetic streaming data.
+### Fixed
 
-The concurrent 0.2.0 baseline and its eight compatibility checks are retained.
-No stream implementation changes are included in this release.
+- `events.stream()` lost events when a CRLF line break was split across
+  transport chunks inside a multi-line `data` frame.
+- `events.stream()` results depended on chunking for large frames. A frame
+  exactly at the size limit (262,144 UTF-16 code units) was dropped when a
+  chunk ended inside its closing blank line. After an oversized frame was
+  dropped mid-stream, its remaining lines could be parsed as a new frame,
+  yielding an event the server never sent as one. The parser is now
+  incremental and line-based. Oversized frames are skipped to their closing
+  blank line, and parse cost is linear in the body size (it was quadratic
+  for large frames delivered in small chunks).
+- `events.stream()` hung on abort when a custom transport or its body
+  ignored the signal: while connecting, while reading, and while reading an
+  HTTP error body. A response that arrives after the abort has its body
+  cancelled.
+- Leaving the `for await` loop hung when the response body's `cancel()`
+  never settled. The body is now cancelled without waiting on it.
+- HTTP error responses from `events.stream()` left the body reader locked
+  when the error body failed mid-read or exceeded 64 KiB. An error body with
+  an oversized `content-length` was never cancelled.
+- Aborting while the consumer was paused inside its loop body did not
+  release the connection until the iterator was resumed. The body is now
+  cancelled as soon as the signal aborts.
+- An abort that landed after the transport resolved but before the stream
+  started reading rejected with `RequestAbortedError` without cancelling the
+  response body, for both successful and HTTP error responses.
+- An abort after the final end-of-stream event was ignored: the next
+  `next()` reported normal completion instead of `RequestAbortedError`.
+- A transport chunk holding many events was parsed in full (every frame
+  JSON-parsed and validated) before the first event was delivered, and that
+  work was wasted when the consumer stopped early.
+- A body read that settled just before the caller aborted was still
+  processed: the chunk was decoded and parsed up to the next event (for
+  example 1,001 frames) before `RequestAbortedError` was thrown. An
+  end-of-stream read in the same window still parsed the final
+  compatibility frame, and an HTTP error body could still be decoded and
+  JSON-parsed. Cancellation is now checked whenever the stream resumes after
+  waiting, before anything it received is used, so nothing is decoded or
+  parsed after an abort. The abort reason and reader/listener cleanup are
+  unchanged.
 
 ## [0.2.0-workbench] - 2026-11-16
 
